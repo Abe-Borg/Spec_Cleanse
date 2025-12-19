@@ -45,6 +45,10 @@ def print_result(result: ProcessingResult, verbose: bool = False, style_result: 
         print()
         return
     
+    # Separate preserved vs removed detections
+    removed_detections = [d for d in result.detections if d.content_type != ContentType.PRESERVE]
+    preserved_detections = [d for d in result.detections if d.content_type == ContentType.PRESERVE]
+    
     # Summary by type
     type_counts = {}
     for d in result.detections:
@@ -57,13 +61,39 @@ def print_result(result: ProcessingResult, verbose: bool = False, style_result: 
             status = "preserved" if type_name == "preserve" else "removed"
             print(f"  • {type_name}: {count} ({status})")
         print()
-        
-        print(f"Total Content Removed:   {result.removed_count}")
-        print(f"Total Content Preserved: {result.preserved_count}")
+    
+    print(f"Total Content Removed:   {len(removed_detections)}")
+    print(f"Total Content Preserved: {len(preserved_detections)}")
+    print()
+    
+    # Always show removed content details (not just in verbose mode)
+    if removed_detections:
+        print("-" * 60)
+        print("REMOVED CONTENT:")
+        print("-" * 60)
+        for i, d in enumerate(removed_detections, 1):
+            preview = d.text[:80] + "..." if len(d.text) > 80 else d.text
+            preview = preview.replace('\n', '↵').replace('\r', '')
+            print(f"\n{i}. [{d.content_type.value}]")
+            print(f"   \"{preview}\"")
+            if verbose:
+                print(f"   Confidence: {d.confidence:.0%}")
+                print(f"   Reason: {d.reason}")
+    
+    # Show preserved content in verbose mode
+    if verbose and preserved_detections:
         print()
+        print("-" * 60)
+        print("PRESERVED CONTENT (matched whitelist):")
+        print("-" * 60)
+        for i, d in enumerate(preserved_detections, 1):
+            preview = d.text[:80] + "..." if len(d.text) > 80 else d.text
+            preview = preview.replace('\n', '↵').replace('\r', '')
+            print(f"  {i}. \"{preview}\"")
     
     # Style cleaning results
     if style_result:
+        print()
         print("-" * 60)
         print("Style Cleaning:")
         print(f"  Total styles defined:  {style_result.total_styles}")
@@ -72,10 +102,16 @@ def print_result(result: ProcessingResult, verbose: bool = False, style_result: 
         print(f"  Unused (protected):    {len(style_result.protected_styles)}")
         print(f"  Styles removed:        {len(style_result.removed_styles)}")
         
-        if verbose and style_result.removed_styles:
+        if style_result.removed_styles:
             print()
             print("  Removed styles:")
             for style_id in sorted(style_result.removed_styles):
+                print(f"    - {style_id}")
+        
+        if verbose and style_result.unused_styles:
+            print()
+            print("  Removable (not yet removed in dry-run):")
+            for style_id in sorted(style_result.unused_styles):
                 print(f"    - {style_id}")
         print()
     
