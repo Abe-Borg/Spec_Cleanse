@@ -134,7 +134,9 @@ Content Preserved:
     parser.add_argument(
         "output",
         type=Path,
-        help="Output DOCX file path"
+        nargs="?",
+        default=None,
+        help="Output DOCX file path (not required for --dry-run)"
     )
     
     parser.add_argument(
@@ -191,8 +193,16 @@ Content Preserved:
         print(f"Warning: Input file does not have .docx extension: {args.input}", 
               file=sys.stderr)
     
+    # Validate output argument
+    if not args.dry_run and args.output is None:
+        print("Error: Output file required (unless using --dry-run)", file=sys.stderr)
+        sys.exit(1)
+    
+    # For dry-run without output, use a placeholder path for reporting
+    if args.output is None:
+        args.output = Path("(dry-run)")
     # Ensure output has .docx extension
-    if args.output.suffix.lower() != ".docx":
+    elif args.output.suffix.lower() != ".docx":
         args.output = args.output.with_suffix(".docx")
     
     # Load config
