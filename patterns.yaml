@@ -136,11 +136,11 @@ preserve_patterns:
   description: "Patterns to always preserve even if they match removal rules"
   
   text_patterns:
-    - 'end\s+of\s+section'
-    - 'end\s+of\s+document'
-    - 'part\s+\d+'
-    - 'section\s+\d+'
-    - 'article\s+\d+'
+    # Only protect actual section/part headings at start of line
+    - '^\s*end\s+of\s+section'
+    - '^\s*section\s+\d{4,}'          # Section headings like "SECTION 238126"
+    - '^\s*part\s+\d+\s*[-–—:]'       # Part headings like "PART 1 - GENERAL"
+    - '^\s*article\s+\d+\s*[-–—:]'    # Article headings
 
 # Advanced: Style-based detection
 style_based_detection:
@@ -149,6 +149,7 @@ style_based_detection:
   
   # Paragraph styles that indicate specifier content
   paragraph_styles:
+    - "CMT"
     - "SpecifierNote"
     - "Specifier Note"
     - "EditorNote"
