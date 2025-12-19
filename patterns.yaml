@@ -1,0 +1,165 @@
+# SpecCleanse Detection Patterns Configuration
+# Each pattern set can be enabled/disabled and customized
+
+specifier_notes:
+  enabled: true
+  description: "Editorial comments meant for specifiers, not final spec"
+  
+  # Text patterns (case-insensitive regex)
+  text_patterns:
+    - '\[specifier[:\s].*?\]'           # [Specifier: ...]
+    - '\[note to specifier\]'           # [NOTE TO SPECIFIER]
+    - 'note to specifier[:\s]'          # NOTE TO SPECIFIER:
+    - '\[specifier note\]'              # [Specifier Note]
+    - '\[edit.*?note.*?\]'              # [Edit Note], [Editor's Note]
+    - '\[coordinator.*?note.*?\]'       # [Coordinator Note]
+    - '<specifier.*?>'                  # <Specifier Note>
+    - '^\s*\*\*\*.*?\*\*\*\s*$'         # *** specifier notes ***
+    - '\[verify\s+.*?\]'                # [Verify ...] instructions
+    - '\[coordinate\s+.*?\]'            # [Coordinate ...] instructions
+    - '\[confirm\s+.*?\]'               # [Confirm ...] instructions
+    
+  # Formatting indicators (if text has these, increase confidence)
+  formatting_signals:
+    italic: true
+    colors:
+      - "FF0000"  # Red
+      - "C00000"  # Dark red
+      - "0000FF"  # Blue
+      - "0070C0"  # Light blue
+    highlight_colors:
+      - "yellow"
+      - "cyan"
+
+copyright_notices:
+  enabled: true
+  description: "Boilerplate copyright text"
+  
+  text_patterns:
+    - '©'
+    - 'copyright\s+\d{4}'
+    - 'copyright\s+©'
+    - 'all\s+rights\s+reserved'
+    - 'may\s+not\s+be\s+reproduced'
+    - 'proprietary\s+information'
+    - 'licensed\s+for\s+use\s+by'
+    - 'duplication.*?prohibited'
+    - 'unauthorized.*?reproduction'
+    
+  # Copyright often appears in specific locations
+  location_boost:
+    - first_paragraph
+    - last_paragraph
+    - header
+    - footer
+
+hidden_text:
+  enabled: true
+  description: "Content marked as hidden in Word"
+  
+  # This is detected via XML property, not pattern
+  xml_property: "w:vanish"
+
+specagent_references:
+  enabled: true
+  description: "SpecAgent.com watermarks and references"
+  
+  text_patterns:
+    - 'specagent\.com'
+    - 'specagent'
+    - 'spec\s*agent'
+    - 'www\.specagent'
+    - 'produced\s+by\s+specagent'
+    - 'generated\s+by\s+specagent'
+    
+  # Also check these locations specifically
+  check_locations:
+    - header
+    - footer
+    - watermark
+
+editorial_artifacts:
+  enabled: true
+  description: "Placeholder instructions and editing artifacts"
+  
+  text_patterns:
+    # Retain/delete instructions
+    - 'retain\s+or\s+delete'
+    - 'delete\s+if\s+not\s+(applicable|required|used)'
+    - 'retain\s+if\s+(applicable|required|used)'
+    - 'select\s+one'
+    - 'choose\s+one'
+    - 'delete\s+options?\s+not\s+(applicable|required|selected)'
+    - 'revise\s+as\s+required'
+    - 'edit\s+as\s+required'
+    - 'modify\s+as\s+required'
+    - 'coordinate\s+with\s+(architect|engineer|owner)'
+    
+    # Insert placeholders
+    - '<insert\s*.*?>'
+    - '\[insert\s*.*?\]'
+    - '\{insert\s*.*?\}'
+    - '<enter\s*.*?>'
+    - '\[enter\s*.*?\]'
+    
+    # Empty placeholders
+    - '\[\s*\]'                         # Empty brackets
+    - '<\s*>'                           # Empty angle brackets
+    - '\[_+\]'                          # [___]
+    - '<_+>'                            # <___>
+    - '\[\.\.+\]'                       # [...]
+    
+    # Common editing instructions
+    - 'delete\s+this\s+(paragraph|section|line)'
+    - 'remove\s+this\s+(paragraph|section|line)'
+    - 'to\s+be\s+determined'
+    - '\[tbd\]'
+    - '\[n/a\]'
+    - '\[pending\]'
+    - 'fill\s+in\s+(the\s+)?blank'
+    - 'complete\s+this\s+section'
+    - 'verify\s+(with|before)\s+'
+    
+    # Section markers that aren't content
+    - '---+\s*optional\s*---+'
+    - '===+\s*optional\s*===+'
+    - '\*{3,}\s*optional\s*\*{3,}'
+    
+    # BSD/MasterSpec style markers
+    - '^\s*\.\s*\d+\s*$'               # Just a number like ".1" alone
+    - 'optional\s+paragraph'
+    - 'alternate\s+paragraph'
+
+# Content that should NEVER be removed (whitelist)
+preserve_patterns:
+  enabled: true
+  description: "Patterns to always preserve even if they match removal rules"
+  
+  text_patterns:
+    - 'end\s+of\s+section'
+    - 'end\s+of\s+document'
+    - 'part\s+\d+'
+    - 'section\s+\d+'
+    - 'article\s+\d+'
+
+# Advanced: Style-based detection
+style_based_detection:
+  enabled: true
+  description: "Detect content based on paragraph/character style names"
+  
+  # Paragraph styles that indicate specifier content
+  paragraph_styles:
+    - "SpecifierNote"
+    - "Specifier Note"
+    - "EditorNote"
+    - "Editor Note"
+    - "EditorialNote"
+    - "NotetoSpecifier"
+    - "CoordinatorNote"
+    
+  # Character styles that indicate specifier content  
+  character_styles:
+    - "SpecifierNote"
+    - "Specifier Note"
+    - "EditorNote"
+    - "Hidden"
