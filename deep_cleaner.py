@@ -1013,7 +1013,8 @@ class DeepCleaner:
         internal_prefixes = ('_GoBack', '_Ref', '_Toc', '_Hlk', '_PictureBullets')
         
         try:
-            tree = ET.parse(doc_path)
+            parser = etree.XMLParser(remove_blank_text=False)
+            tree = etree.parse(str(doc_path), parser)
             root = tree.getroot()
             
             bookmark_ids_to_remove = set()
@@ -1042,8 +1043,8 @@ class DeepCleaner:
                     bookmarks_removed += 1
             
             if bookmarks_removed:
-                tree.write(doc_path, encoding='UTF-8', xml_declaration=True)
-            
+                tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+
             self.result.bookmarks_removed = bookmarks_removed // 2
             self.result.bytes_saved += self.result.bookmarks_removed * 80
         
@@ -1059,7 +1060,8 @@ class DeepCleaner:
         settings_path = self.extract_dir / "word" / "settings.xml"
         if settings_path.exists():
             try:
-                tree = ET.parse(settings_path)
+                parser = etree.XMLParser(remove_blank_text=False)
+                tree = etree.parse(str(settings_path), parser)
                 root = tree.getroot()
                 
                 for parent in root.iter():
@@ -1074,7 +1076,8 @@ class DeepCleaner:
                         total_removed += 1
                 
                 if total_removed > 0:
-                    tree.write(settings_path, encoding='UTF-8', xml_declaration=True)
+                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+
             
             except Exception as e:
                 self.result.warnings.append(f"Failed to clean proof state from settings: {e}")
@@ -1083,7 +1086,8 @@ class DeepCleaner:
         doc_path = self.extract_dir / "word" / "document.xml"
         if doc_path.exists():
             try:
-                tree = ET.parse(doc_path)
+                parser = etree.XMLParser(remove_blank_text=False)
+                tree = etree.parse(str(doc_path), parser)
                 root = tree.getroot()
                 doc_removed = 0
                 
@@ -1098,7 +1102,7 @@ class DeepCleaner:
                         doc_removed += 1
                 
                 if doc_removed > 0:
-                    tree.write(doc_path, encoding='UTF-8', xml_declaration=True)
+                    tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8', standalone=True)
                     total_removed += doc_removed
             
             except Exception as e:
@@ -1116,7 +1120,7 @@ class DeepCleaner:
             return False
         
         try:
-            ET.parse(ct_path)
+            etree.parse(str(ct_path))
         except etree.XMLSyntaxError as e:
             self.result.errors.append(f"Invalid [Content_Types].xml: {e}")
             return False
@@ -1134,7 +1138,7 @@ class DeepCleaner:
             return False
         
         try:
-            ET.parse(doc_path)
+            etree.parse(str(doc_path))
         except etree.XMLSyntaxError as e:
             self.result.errors.append(f"Invalid document.xml: {e}")
             return False
