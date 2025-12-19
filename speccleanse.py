@@ -203,17 +203,57 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
         result.bytes_saved = report.estimated_savings_bytes
         return result
     
+    # If --only is specified, disable everything except that one operation
+    only = getattr(args, 'only', None)
+    if only:
+        # Start with everything disabled
+        flags = {
+            'remove_relationships': False,
+            'remove_media': False,
+            'remove_styles': False,
+            'strip_rsids': False,
+            'remove_empty_elements': False,
+            'remove_non_english_fonts': False,
+            'remove_compat_settings': False,
+            'remove_internal_bookmarks': False,
+            'remove_proof_state': False,
+        }
+        # Enable only the specified operation
+        only_map = {
+            'relationships': 'remove_relationships',
+            'media': 'remove_media',
+            'styles': 'remove_styles',
+            'rsids': 'strip_rsids',
+            'empty': 'remove_empty_elements',
+            'fonts': 'remove_non_english_fonts',
+            'compat': 'remove_compat_settings',
+            'bookmarks': 'remove_internal_bookmarks',
+            'proof': 'remove_proof_state',
+        }
+        if only in only_map:
+            flags[only_map[only]] = True
+            if verbose:
+                print(f"  [DEBUG] Running ONLY: {only}")
+        else:
+            print(f"Warning: Unknown --only value '{only}', running all operations")
+            flags = {k: True for k in flags}
+    else:
+        # Normal mode: use --no-* flags
+        flags = {
+            'remove_relationships': not args.no_relationships,
+            'remove_media': not args.no_media,
+            'remove_styles': not args.no_deep_styles,
+            'strip_rsids': not args.no_rsids,
+            'remove_empty_elements': not args.no_empty,
+            'remove_non_english_fonts': not args.no_fonts,
+            'remove_compat_settings': not args.no_compat,
+            'remove_internal_bookmarks': not args.no_bookmarks,
+            'remove_proof_state': not args.no_proof,
+        }
+    
     return analyze_and_clean(
         unpacked_dir,
-        remove_relationships=not args.no_relationships,
-        remove_media=not args.no_media,
-        remove_styles=not args.no_deep_styles,
-        strip_rsids=not args.no_rsids,
-        remove_empty_elements=not args.no_empty,
-        remove_non_english_fonts=not args.no_fonts,
-        remove_compat_settings=not args.no_compat,
-        remove_internal_bookmarks=not args.no_bookmarks,
-        remove_proof_state=not args.no_proof,
+        **flags,
         verbose=verbose,
     )
 
@@ -328,6 +368,13 @@ Deep Clean (--deep):
     
     # Granular deep clean flags (all default to False = enabled)
     deep_group = parser.add_argument_group("Deep clean options (use with --deep)")
+
+
+    deep_group.add_argument(
+        "--only",
+        choices=['relationships', 'media', 'styles', 'rsids', 'empty', 'fonts', 'compat', 'bookmarks', 'proof'],
+        help="Run ONLY this single deep clean operation (for debugging)"
+    )
     
     deep_group.add_argument(
         "--no-relationships",
