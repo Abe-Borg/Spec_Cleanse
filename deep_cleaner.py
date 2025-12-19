@@ -800,7 +800,7 @@ class DeepCleaner:
                         removed += 1
                 
                 if removed > 0:
-                    tree.write(str(rels_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+                    tree.write(str(rels_path), xml_declaration=True, encoding='UTF-8')
                     self.result.relationships_removed += removed
             
             except etree.XMLSyntaxError as e:
@@ -832,7 +832,7 @@ class DeepCleaner:
                     removed += 1
             
             if removed > 0:
-                tree.write(str(styles_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+                tree.write(str(styles_path), xml_declaration=True, encoding='UTF-8')
 
                 self.result.styles_removed = removed
         
@@ -908,7 +908,7 @@ class DeepCleaner:
                         modified = True
                 
                 if modified:
-                    tree.write(str(xml_file), xml_declaration=True, encoding='UTF-8', standalone=True)
+                    tree.write(str(xml_file), xml_declaration=True, encoding='UTF-8')
 
             
             except Exception as e:
@@ -949,7 +949,7 @@ class DeepCleaner:
                         modified = True
                 
                 if modified:
-                    tree.write(str(theme_file), xml_declaration=True, encoding='UTF-8', standalone=True)
+                    tree.write(str(theme_file), xml_declaration=True, encoding='UTF-8')
 
             
             except Exception as e:
@@ -995,7 +995,7 @@ class DeepCleaner:
                     total_removed += 1
             
             if total_removed > 0:
-                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
             
             self.result.compat_settings_removed = total_removed
             self.result.bytes_saved += total_removed * 50
@@ -1043,7 +1043,7 @@ class DeepCleaner:
                     bookmarks_removed += 1
             
             if bookmarks_removed:
-                tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+                tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8')
 
             self.result.bookmarks_removed = bookmarks_removed // 2
             self.result.bytes_saved += self.result.bookmarks_removed * 80
@@ -1076,7 +1076,7 @@ class DeepCleaner:
                         total_removed += 1
                 
                 if total_removed > 0:
-                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
 
             
             except Exception as e:
@@ -1102,7 +1102,7 @@ class DeepCleaner:
                         doc_removed += 1
                 
                 if doc_removed > 0:
-                    tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+                    tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8')
                     total_removed += doc_removed
             
             except Exception as e:
