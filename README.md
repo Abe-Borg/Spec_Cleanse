@@ -4,13 +4,30 @@ A Python CLI tool that removes unnecessary content from specification Word docum
 
 ## Features
 
-- **Removes specifier notes** - Editorial comments like `[Specifier: ...]`, `NOTE TO SPECIFIER`, etc.
-- **Removes copyright notices** - Boilerplate copyright and licensing text
-- **Removes hidden text** - Content marked with Word's vanish property
-- **Removes SpecAgent references** - Watermarks, footers, URLs from specagent.com
-- **Removes editorial artifacts** - Placeholders like `<insert>`, `RETAIN OR DELETE`, `[TBD]`
-- **Removes unused styles** - Styles defined but never referenced in document content
-- **Preserves legitimate content** - "END OF SECTION", actual spec text, all formatting
+### Shallow Clean (Default)
+Content-level cleaning that removes editorial/specifier content:
+
+- **Specifier notes** - Editorial comments like `[Specifier: ...]`, `NOTE TO SPECIFIER`, etc.
+- **Copyright notices** - Boilerplate copyright and licensing text
+- **Hidden text** - Content marked with Word's vanish property
+- **SpecAgent references** - Watermarks, footers, URLs from specagent.com
+- **Editorial artifacts** - Placeholders like `<insert>`, `RETAIN OR DELETE`, `[TBD]`
+- **Unused styles** - Styles defined but never referenced in document content
+
+### Deep Clean (`--deep`)
+ZIP/XML-level cleaning that removes accumulated cruft:
+
+| Category | What Gets Removed | Typical Savings |
+|----------|-------------------|-----------------|
+| **Orphaned Relationships** | Dead hyperlinks (like SpecAgent refs), unused internal links | ~200 bytes each |
+| **Orphaned Media** | Images in `word/media/` that nothing references | Variable (KB-MB) |
+| **Orphaned Styles** | Style definitions never used in document content | ~500 bytes each |
+| **RSID Attributes** | Revision tracking IDs on every element | ~25 bytes each, often 1000s per doc |
+| **Empty Elements** | Empty runs `<w:r/>`, empty properties `<w:rPr/>` | ~20 bytes each |
+| **Non-English Fonts** | Font mappings for Japanese, Arabic, Hebrew, etc. in theme | ~60 bytes each |
+| **Compat Settings** | Backwards compatibility for Word 97/2002/2003 | ~50 bytes each |
+| **Internal Bookmarks** | `_GoBack`, `_Hlk*`, `_Ref*` bookmarks | ~80 bytes each |
+| **Proof State** | Spell/grammar check state markers | ~40 bytes each |
 
 ## Installation
 
@@ -36,17 +53,20 @@ pip install lxml pyyaml
 ### Basic Usage
 
 ```bash
-# Process a specification document
+# Shallow clean only (remove specifier notes, copyright, etc.)
 python speccleanse.py input.docx cleaned.docx
 
+# Shallow + deep clean (full optimization)
+python speccleanse.py input.docx cleaned.docx --deep
+
 # Preview what would be removed (dry run)
-python speccleanse.py input.docx cleaned.docx --dry-run
+python speccleanse.py input.docx cleaned.docx --deep --dry-run
+
+# Deep clean only (skip content removal)
+python speccleanse.py input.docx cleaned.docx --deep-only
 
 # Verbose output with detailed detections
-python speccleanse.py input.docx cleaned.docx -v
-
-# Use custom patterns configuration
-python speccleanse.py input.docx cleaned.docx --config my_patterns.yaml
+python speccleanse.py input.docx cleaned.docx --deep -v
 ```
 
 ### Command Line Options
@@ -61,7 +81,25 @@ python speccleanse.py input.docx cleaned.docx --config my_patterns.yaml
 | `-q, --quiet` | Suppress output except errors |
 | `--clean-styles` | Also remove unused styles from document |
 | `--styles-only` | Only clean unused styles, skip content removal |
+| `--deep` | Enable deep cleaning (orphans + cruft) |
+| `--deep-only` | Only perform deep cleaning, skip shallow clean |
 | `--version` | Show version number |
+
+### Deep Clean Options
+
+Use these with `--deep` to selectively disable specific cleaning operations:
+
+| Option | Description |
+|--------|-------------|
+| `--no-relationships` | Keep orphaned hyperlinks/relationships |
+| `--no-media` | Keep orphaned media files |
+| `--no-deep-styles` | Keep orphaned style definitions |
+| `--no-rsids` | Keep RSID tracking attributes |
+| `--no-empty` | Keep empty runs/elements |
+| `--no-fonts` | Keep non-English font mappings |
+| `--no-compat` | Keep backwards compatibility settings |
+| `--no-bookmarks` | Keep internal Word bookmarks |
+| `--no-proof` | Keep spell/grammar check state |
 
 ### Examples
 
@@ -69,51 +107,53 @@ python speccleanse.py input.docx cleaned.docx --config my_patterns.yaml
 # Basic processing
 python speccleanse.py "Division 23 - HVAC.docx" "Division 23 - HVAC_cleaned.docx"
 
-# Preview mode to see what would be removed
-python speccleanse.py spec.docx out.docx --dry-run -v
+# Preview shallow + deep clean
+python speccleanse.py spec.docx out.docx --deep --dry-run -v
 
-# Clean content AND unused styles
-python speccleanse.py spec.docx out.docx --clean-styles
+# Full clean with style removal
+python speccleanse.py spec.docx out.docx --deep --clean-styles
 
-# Only remove unused styles (no content changes)
-python speccleanse.py spec.docx out.docx --styles-only
+# Deep clean: only RSIDs (safest, biggest savings)
+python speccleanse.py spec.docx out.docx --deep \
+    --no-relationships --no-media --no-deep-styles \
+    --no-empty --no-fonts --no-compat --no-bookmarks --no-proof
+
+# Deep clean: everything except non-English fonts (for multilingual docs)
+python speccleanse.py spec.docx out.docx --deep --no-fonts
 
 # Quiet mode for scripting
-python speccleanse.py spec.docx out.docx -q && echo "Success"
+python speccleanse.py spec.docx out.docx --deep -q && echo "Success"
 ```
 
-## Style Cleaning
+## How It Works
 
-SpecCleanse can detect and remove unused styles from your specification documents. This is useful for cleaning up documents that have accumulated many unused styles over time.
+### Shallow Clean Pipeline
 
-### How It Works
+1. **Unpack** - DOCX files are ZIP archives; SpecCleanse extracts them
+2. **Parse** - XML content is parsed with lxml, preserving structure
+3. **Detect** - Each paragraph and run is analyzed against patterns
+4. **Decide** - Confidence scores determine if content is removed
+5. **Remove** - Elements are surgically removed, preserving surrounding content
+6. **Repack** - Modified XML is repacked into a new DOCX
 
-1. Parses `word/styles.xml` to find all defined styles
-2. Scans document content (including headers, footers, footnotes) for style references
-3. Builds a dependency graph (basedOn, link, next relationships)
-4. Identifies styles that are not used and not required by used styles
-5. Removes unused styles while preserving protected/built-in styles
+### Deep Clean Pipeline
 
-### Protected Styles
+1. **Analyze** - Scan all XML files to find defined vs. used resources
+2. **Compute Orphans** - Resources defined but never referenced
+3. **Scan Cruft** - RSIDs, empty elements, compatibility settings, etc.
+4. **Remove** - Delete orphaned files, strip attributes, clean XML
+5. **Validate** - Verify document structure is intact
+6. **Repack** - Reconstruct DOCX with cleaned content
 
-Certain built-in styles are never removed even if unused:
-- Normal, DefaultParagraphFont, TableNormal, NoList
-- Heading1-9, Title, Subtitle
-- Header, Footer, TOC styles
-- And other Word essential styles
+### Confidence Scoring
 
-### Usage
+Each detection has a confidence score (0.0 - 1.0):
+- Pattern match alone: ~0.6
+- Pattern + italic: ~0.8
+- Pattern + color: ~0.9
+- Style name match: ~0.8+
 
-```bash
-# Analyze styles without modifying
-python speccleanse.py doc.docx out.docx --styles-only --dry-run -v
-
-# Remove unused styles only
-python speccleanse.py doc.docx out.docx --styles-only
-
-# Remove content AND unused styles
-python speccleanse.py doc.docx out.docx --clean-styles
-```
+Content is removed if confidence ≥ 0.5 and no preserve pattern matches.
 
 ## Detection Patterns
 
@@ -171,31 +211,49 @@ preserve_patterns:
     - 'my\s+important\s+pattern'  # Add your own!
 ```
 
-### Pattern Syntax
+## Understanding DOCX Internals
 
-- Patterns use Python regex syntax (case-insensitive)
-- Use `.*?` for non-greedy matching
-- Use `\s` for whitespace
-- Colors are Word's internal hex codes (without #)
+A DOCX file is a ZIP archive containing:
 
-## How It Works
+```
+docx_file.docx
+├── [Content_Types].xml      # Maps file types to MIME types
+├── _rels/
+│   └── .rels               # Root relationships (points to main doc)
+├── docProps/
+│   ├── app.xml             # Application properties
+│   └── core.xml            # Core metadata (author, dates)
+└── word/
+    ├── _rels/
+    │   └── document.xml.rels  # Document relationships (images, hyperlinks)
+    ├── document.xml        # THE ACTUAL CONTENT
+    ├── styles.xml          # Style definitions
+    ├── settings.xml        # Document settings
+    ├── fontTable.xml       # Font declarations
+    ├── numbering.xml       # List/numbering definitions
+    ├── webSettings.xml     # Web-related settings (paste artifacts)
+    ├── theme/
+    │   └── theme1.xml      # Theme colors/fonts
+    └── media/              # Embedded images
+        ├── image1.png
+        └── image2.jpg
+```
 
-1. **Unpack** - DOCX files are ZIP archives; SpecCleanse extracts them
-2. **Parse** - XML content is parsed with lxml, preserving structure
-3. **Detect** - Each paragraph and run is analyzed against patterns
-4. **Decide** - Confidence scores determine if content is removed
-5. **Remove** - Elements are surgically removed, preserving surrounding content
-6. **Repack** - Modified XML is repacked into a new DOCX
+### Relationship IDs (rIds)
 
-### Confidence Scoring
+Content in `document.xml` references external resources via `rId` attributes:
 
-Each detection has a confidence score (0.0 - 1.0):
-- Pattern match alone: ~0.6
-- Pattern + italic: ~0.8
-- Pattern + color: ~0.9
-- Style name match: ~0.8+
+```xml
+<!-- Hyperlink using rId8 -->
+<w:hyperlink r:id="rId8">
+  <w:r><w:t>Click here</w:t></w:r>
+</w:hyperlink>
 
-Content is removed if confidence ≥ 0.5 and no preserve pattern matches.
+<!-- Image using rId5 -->
+<a:blip r:embed="rId5"/>
+```
+
+**Orphaned relationships** occur when an rId exists in the `.rels` file but nothing in the document references it.
 
 ## File Structure
 
@@ -205,16 +263,36 @@ speccleanse/
 ├── detection.py       # Detection engine and detectors
 ├── processor.py       # DOCX content processing logic
 ├── style_cleaner.py   # Unused style detection and removal
+├── deep_cleaner.py    # Orphan analysis and deep cleaning
 ├── patterns.yaml      # Configurable detection patterns
+├── diagnose.py        # Diagnostic tool for inspecting documents
 └── README.md          # This file
 ```
 
-## Limitations
+## Diagnostic Tool
 
-- Only processes `.docx` format (not `.doc`)
-- Complex nested tables may have edge cases
-- Embedded objects (OLE) are not scanned for text
-- Very large documents may be slow (processes all XML)
+Use `diagnose.py` to inspect document formatting and help configure patterns:
+
+```bash
+# Find paragraphs containing specific text
+python diagnose.py input.docx -s "specifier"
+
+# Show all paragraphs with formatting details
+python diagnose.py input.docx -a
+
+# Find likely editorial content and show its formatting
+python diagnose.py input.docx -e
+```
+
+## Common Specification Cruft
+
+Master spec templates (like MasterSpec, BSD SpecLink, ARCOM) often accumulate:
+
+1. **SpecAgent hyperlinks** - Product lookup URLs that should be removed for final specs
+2. **Unused styles** - Template styles for sections you deleted
+3. **Paste artifacts** - `<w:div>` elements in webSettings.xml from copy/paste
+4. **Revision history** - Tracked changes that were accepted but leave cruft
+5. **Dead media** - Images from deleted sections
 
 ## Troubleshooting
 
@@ -233,6 +311,27 @@ speccleanse/
 - Add patterns to `preserve_patterns` section
 - Adjust confidence thresholds in detection.py
 - Use `--dry-run` to preview before processing
+
+**Document won't open after cleaning**
+- Check the error messages in the output
+- Try selective deep cleaning (e.g., `--no-deep-styles`) to isolate the problem
+- Deep clean validates structure before completing
+
+**Still seeing SpecAgent references after deep clean**
+- Deep clean removes orphaned relationships
+- If hyperlinks are still in content, run shallow clean first (default behavior)
+
+**File size didn't change much with deep clean**
+- Orphan removal typically saves a few KB
+- The big wins come from RSID stripping (often 25-125 KB)
+- Running after shallow clean creates more orphans to remove
+
+## Limitations
+
+- Only processes `.docx` format (not `.doc`)
+- Complex nested tables may have edge cases
+- Embedded objects (OLE) are not scanned for text
+- Very large documents may be slow (processes all XML)
 
 ## Contributing
 
