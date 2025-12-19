@@ -132,7 +132,6 @@ def print_result(result: ProcessingResult, verbose: bool = False,
         print("-" * 60)
         print()
         print("  Orphans Removed:")
-        print(f"    Relationships:       {deep_result.relationships_removed}")
         print(f"    Media files:         {deep_result.media_removed}")
         print(f"    Styles:              {deep_result.styles_removed}")
         print()
@@ -191,7 +190,6 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
         # Create a pseudo-result for reporting
         from deep_cleaner import DeepCleanResult
         result = DeepCleanResult(success=True)
-        result.relationships_removed = len(report.orphaned_relationships)
         result.media_removed = len(report.orphaned_media)
         result.styles_removed = len(report.orphaned_styles)
         result.rsids_removed = report.total_rsid_attributes
@@ -208,7 +206,6 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
     if only:
         # Start with everything disabled
         flags = {
-            'remove_relationships': False,
             'remove_media': False,
             'remove_styles': False,
             'strip_rsids': False,
@@ -220,7 +217,6 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
         }
         # Enable only the specified operation
         only_map = {
-            'relationships': 'remove_relationships',
             'media': 'remove_media',
             'styles': 'remove_styles',
             'rsids': 'strip_rsids',
@@ -240,7 +236,6 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
     else:
         # Normal mode: use --no-* flags
         flags = {
-            'remove_relationships': not args.no_relationships,
             'remove_media': not args.no_media,
             'remove_styles': not args.no_deep_styles,
             'strip_rsids': not args.no_rsids,
@@ -278,7 +273,7 @@ Examples:
   speccleanse input.docx output.docx --deep-only
 
   # Selective deep clean (RSIDs only)
-  speccleanse input.docx output.docx --deep --no-relationships --no-media \\
+  speccleanse input.docx output.docx --deep --no-media \\
       --no-deep-styles --no-empty --no-fonts --no-compat --no-bookmarks --no-proof
 
 Shallow Clean (default):
@@ -289,7 +284,6 @@ Shallow Clean (default):
   • Editorial artifacts (placeholders, instructions)
 
 Deep Clean (--deep):
-  • Orphaned relationships (dead hyperlinks like SpecAgent refs)
   • Orphaned media files (images from deleted sections)
   • Orphaned styles (unused style definitions)
   • RSID attributes (revision tracking IDs - biggest savings)
@@ -372,14 +366,8 @@ Deep Clean (--deep):
 
     deep_group.add_argument(
         "--only",
-        choices=['relationships', 'media', 'styles', 'rsids', 'empty', 'fonts', 'compat', 'bookmarks', 'proof'],
+        choices=['media', 'styles', 'rsids', 'empty', 'fonts', 'compat', 'bookmarks', 'proof'],
         help="Run ONLY this single deep clean operation (for debugging)"
-    )
-    
-    deep_group.add_argument(
-        "--no-relationships",
-        action="store_true",
-        help="Skip removing orphaned relationships/hyperlinks"
     )
     
     deep_group.add_argument(

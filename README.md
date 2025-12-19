@@ -19,7 +19,6 @@ ZIP/XML-level cleaning that removes accumulated cruft:
 
 | Category | What Gets Removed | Typical Savings |
 |----------|-------------------|-----------------|
-| **Orphaned Relationships** | Dead hyperlinks (like SpecAgent refs), unused internal links | ~200 bytes each |
 | **Orphaned Media** | Images in `word/media/` that nothing references | Variable (KB-MB) |
 | **Orphaned Styles** | Style definitions never used in document content | ~500 bytes each |
 | **RSID Attributes** | Revision tracking IDs on every element | ~25 bytes each, often 1000s per doc |
@@ -91,7 +90,6 @@ Use these with `--deep` to selectively disable specific cleaning operations:
 
 | Option | Description |
 |--------|-------------|
-| `--no-relationships` | Keep orphaned hyperlinks/relationships |
 | `--no-media` | Keep orphaned media files |
 | `--no-deep-styles` | Keep orphaned style definitions |
 | `--no-rsids` | Keep RSID tracking attributes |
@@ -115,7 +113,7 @@ python speccleanse.py spec.docx out.docx --deep --clean-styles
 
 # Deep clean: only RSIDs (safest, biggest savings)
 python speccleanse.py spec.docx out.docx --deep \
-    --no-relationships --no-media --no-deep-styles \
+   --no-media --no-deep-styles \
     --no-empty --no-fonts --no-compat --no-bookmarks --no-proof
 
 # Deep clean: everything except non-English fonts (for multilingual docs)
@@ -253,7 +251,6 @@ Content in `document.xml` references external resources via `rId` attributes:
 <a:blip r:embed="rId5"/>
 ```
 
-**Orphaned relationships** occur when an rId exists in the `.rels` file but nothing in the document references it.
 
 ## File Structure
 
@@ -318,7 +315,6 @@ Master spec templates (like MasterSpec, BSD SpecLink, ARCOM) often accumulate:
 - Deep clean validates structure before completing
 
 **Still seeing SpecAgent references after deep clean**
-- Deep clean removes orphaned relationships
 - If hyperlinks are still in content, run shallow clean first (default behavior)
 
 **File size didn't change much with deep clean**

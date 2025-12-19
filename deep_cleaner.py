@@ -2,7 +2,7 @@
 SpecCleanse Deep Cleaner Module
 
 Performs deep cleaning of DOCX files at the ZIP/XML level:
-- Removes orphaned resources (relationships, media, styles, fonts, numbering)
+- Removes orphaned resources (media, styles, fonts, numbering)
 - Strips cruft (RSIDs, empty elements, non-English fonts, compat settings, bookmarks, proof state)
 
 This module consolidates the functionality from:
@@ -56,7 +56,6 @@ class OrphanReport:
         """Convert to dictionary for internal use."""
         return {
             'orphans': {
-                'relationships': self.orphaned_relationships,
                 'media': self.orphaned_media,
                 'styles': self.orphaned_styles,
                 'fonts': self.orphaned_fonts,
@@ -72,11 +71,6 @@ class OrphanReport:
                 'proof_state_elements': self.proof_state_elements,
             },
             'statistics': {
-                'relationships': {
-                    'defined': self.total_relationships_defined,
-                    'used': self.total_relationships_used,
-                    'orphaned': len(self.orphaned_relationships)
-                },
                 'styles': {
                     'defined': self.total_styles_defined,
                     'used': self.total_styles_used,
@@ -1170,7 +1164,6 @@ def analyze_and_clean(
     
     Args:
         unpacked_dir: Path to unpacked DOCX directory
-        remove_relationships: Remove orphaned hyperlinks/relationships
         remove_media: Remove orphaned media files
         remove_styles: Remove orphaned style definitions
         strip_rsids: Remove RSID tracking attributes
@@ -1189,7 +1182,6 @@ def analyze_and_clean(
     orphan_report = analyzer.analyze()
     
     if verbose:
-        print(f"    Found {len(orphan_report.orphaned_relationships)} orphaned relationships")
         print(f"    Found {len(orphan_report.orphaned_styles)} orphaned styles")
         print(f"    Found {len(orphan_report.orphaned_media)} orphaned media files")
         print(f"    Found {orphan_report.total_rsid_attributes} RSID attributes")
