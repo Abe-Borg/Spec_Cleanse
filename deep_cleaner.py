@@ -178,7 +178,6 @@ class OrphanAnalyzer:
         self._resolve_style_dependencies()
         
         # Phase 4: Compute orphans
-        self._compute_orphaned_relationships()
         self._compute_orphaned_styles()
         self._compute_orphaned_media()
         
@@ -408,30 +407,6 @@ class OrphanAnalyzer:
         self._used_styles.update(builtin_required)
         
         self.report.total_styles_used = len(self._used_styles)
-    
-    def _compute_orphaned_relationships(self):
-        """Find relationships that are never referenced."""
-        for key, rel_info in self._defined_rids.items():
-            rid = rel_info['rId']
-            is_used = key in self._used_rids or rid in self._used_rids
-            
-            essential_types = [
-                'styles', 'settings', 'fontTable', 'numbering', 'webSettings',
-                'theme', 'footnotes', 'endnotes'
-            ]
-            is_essential = any(t in rel_info['type'].lower() for t in essential_types)
-            
-            if not is_used and not is_essential:
-                self.report.orphaned_relationships.append({
-                    'rId': rid,
-                    'target': rel_info['target'],
-                    'type': rel_info['type'].split('/')[-1],
-                    'target_mode': rel_info['target_mode'],
-                    'source_file': rel_info['source_file'],
-                    'reason': "No r:id reference found in content files"
-                })
-        
-        self.report.total_relationships_used = len(self._used_rids)
     
     def _compute_orphaned_styles(self):
         """Find styles that are never used."""
@@ -707,7 +682,6 @@ class DeepCleaner:
         self.result = DeepCleanResult()
         
     def clean(self,
-              remove_relationships: bool = True,
               remove_media: bool = True,
               remove_styles: bool = True,
               strip_rsids: bool = True,
@@ -721,9 +695,6 @@ class DeepCleaner:
         try:
             if remove_media:
                 self._remove_orphaned_media()
-            
-            if remove_relationships:
-                self._remove_orphaned_relationships()
             
             if remove_styles:
                 self._remove_orphaned_styles()
@@ -767,38 +738,6 @@ class DeepCleaner:
                 self.result.media_removed += 1
                 self.result.bytes_saved += size
     
-    def _remove_orphaned_relationships(self):
-        """Remove orphaned relationship entries from .rels files."""
-        by_source: Dict[str, List[str]] = {}
-        for orphan in self.orphan_report.orphaned_relationships:
-            source = orphan.get('source_file', 'word/_rels/document.xml.rels')
-            rid = orphan['rId']
-            if source not in by_source:
-                by_source[source] = []
-            by_source[source].append(rid)
-        
-        for source_file, rids in by_source.items():
-            rels_path = self.extract_dir / source_file
-            if not rels_path.exists():
-                continue
-            
-            try:
-                parser = etree.XMLParser(remove_blank_text = False)
-                tree = etree.parse(str(rels_path), parser)
-                root = tree.getroot()
-
-                removed = 0
-                for rel in list(root):
-                    if rel.get('Id') in rids:
-                        root.remove(rel)
-                        removed += 1
-                
-                if removed > 0:
-                    tree.write(str(rels_path), xml_declaration=True, encoding='UTF-8')
-                    self.result.relationships_removed += removed
-            
-            except etree.XMLSyntaxError as e:
-                self.result.warnings.append(f"Failed to parse {source_file}: {e}")
     
     def _remove_orphaned_styles(self):
         """Remove orphaned style definitions from styles.xml."""
@@ -1146,7 +1085,6 @@ class DeepCleaner:
 
 def analyze_and_clean(
     unpacked_dir: Path,
-    remove_relationships: bool = True,
     remove_media: bool = True,
     remove_styles: bool = True,
     strip_rsids: bool = True,
@@ -1189,7 +1127,6 @@ def analyze_and_clean(
     # Phase 2: Deep clean
     cleaner = DeepCleaner(unpacked_dir, orphan_report, verbose=verbose)
     result = cleaner.clean(
-        remove_relationships=remove_relationships,
         remove_media=remove_media,
         remove_styles=remove_styles,
         strip_rsids=strip_rsids,
