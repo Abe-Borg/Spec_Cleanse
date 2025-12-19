@@ -323,7 +323,7 @@ class OrphanAnalyzer:
             if num_id:
                 self._defined_numIds.add(num_id)
     
-    def _scan_xml_for_references(self, root: ET.Element, source_rels_file: str):
+    def _scan_xml_for_references(self, root: etree._Element, source_rels_file: str):
         """Scan an XML element tree for resource references."""
         if root is None:
             return
