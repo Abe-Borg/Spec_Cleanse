@@ -11,7 +11,7 @@ This module consolidates the functionality from:
 """
 
 import re
-import xml.etree.ElementTree as ET
+from lxml import etree
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Dict, List, Set, Optional
@@ -201,14 +201,15 @@ class OrphanAnalyzer:
         
         return self.report
     
-    def _parse_xml(self, file_path: Path) -> Optional[ET.Element]:
+    def _parse_xml(self, file_path: Path) -> Optional[etree._Element]:
         """Safely parse an XML file."""
         if not file_path.exists():
             return None
         try:
-            tree = ET.parse(file_path)
+            parser = etree.XMLParser(remove_blank_text=False)
+            tree = etree.parse(str(file_path), parser)
             return tree.getroot()
-        except ET.ParseError:
+        except etree.XMLSyntaxError:
             return None
     
     def _collect_defined_relationships(self):
@@ -711,10 +712,6 @@ class DeepCleaner:
         self.verbose = verbose
         self.result = DeepCleanResult()
         
-        # Register namespaces
-        for prefix, uri in self.NAMESPACES.items():
-            ET.register_namespace(prefix, uri)
-    
     def clean(self,
               remove_relationships: bool = True,
               remove_media: bool = True,
@@ -792,9 +789,10 @@ class DeepCleaner:
                 continue
             
             try:
-                tree = ET.parse(rels_path)
+                parser = etree.XMLParser(remove_blank_text = False)
+                tree = etree.parse(str(rels_path), parser)
                 root = tree.getroot()
-                
+
                 removed = 0
                 for rel in list(root):
                     if rel.get('Id') in rids:
@@ -802,10 +800,10 @@ class DeepCleaner:
                         removed += 1
                 
                 if removed > 0:
-                    tree.write(rels_path, encoding='UTF-8', xml_declaration=True)
+                    tree.write(str(rels_path), xml_declaration=True, encoding='UTF-8', standalone=True)
                     self.result.relationships_removed += removed
             
-            except ET.ParseError as e:
+            except etree.XMLSyntaxError as e:
                 self.result.warnings.append(f"Failed to parse {source_file}: {e}")
     
     def _remove_orphaned_styles(self):
@@ -820,7 +818,8 @@ class DeepCleaner:
             return
         
         try:
-            tree = ET.parse(styles_path)
+            parser = etree.XMLParser(remove_blank_text = False)
+            tree = etree.parse(str(styles_path), parser)
             root = tree.getroot()
             
             w_ns = self.NAMESPACES['w']
@@ -833,10 +832,11 @@ class DeepCleaner:
                     removed += 1
             
             if removed > 0:
-                tree.write(styles_path, encoding='UTF-8', xml_declaration=True)
+                tree.write(str(styles_path), xml_declaration=True, encoding='UTF-8', standalone=True)
+
                 self.result.styles_removed = removed
         
-        except ET.ParseError as e:
+        except etree.XMLSyntaxError as e:
             self.result.warnings.append(f"Failed to parse styles.xml: {e}")
     
     def _strip_rsids(self):
@@ -881,7 +881,8 @@ class DeepCleaner:
                 continue
             
             try:
-                tree = ET.parse(xml_file)
+                parser = etree.XMLParser(remove_blank_text = False)
+                tree = etree.parse(str(xml_file), parser)
                 root = tree.getroot()
                 modified = False
                 
@@ -907,7 +908,8 @@ class DeepCleaner:
                         modified = True
                 
                 if modified:
-                    tree.write(xml_file, encoding='UTF-8', xml_declaration=True)
+                    tree.write(str(xml_file), xml_declaration=True, encoding='UTF-8', standalone=True)
+
             
             except Exception as e:
                 self.result.warnings.append(f"Failed to clean empty elements in {rel_path}: {e}")
@@ -927,7 +929,8 @@ class DeepCleaner:
         
         for theme_file in theme_dir.glob('*.xml'):
             try:
-                tree = ET.parse(theme_file)
+                parser = etree.XMLParser(remove_blank_text=False)
+                tree = etree.parse(str(theme_file), parser)
                 root = tree.getroot()
                 modified = False
                 
@@ -946,7 +949,8 @@ class DeepCleaner:
                         modified = True
                 
                 if modified:
-                    tree.write(theme_file, encoding='UTF-8', xml_declaration=True)
+                    tree.write(str(theme_file), xml_declaration=True, encoding='UTF-8', standalone=True)
+
             
             except Exception as e:
                 self.result.warnings.append(f"Failed to clean theme {theme_file.name}: {e}")
@@ -974,7 +978,8 @@ class DeepCleaner:
         }
         
         try:
-            tree = ET.parse(settings_path)
+            parser = etree.XMLParser(remove_blank_text=False)
+            tree = etree.parse(str(settings_path), parser)
             root = tree.getroot()
             total_removed = 0
             
@@ -990,7 +995,7 @@ class DeepCleaner:
                     total_removed += 1
             
             if total_removed > 0:
-                tree.write(settings_path, encoding='UTF-8', xml_declaration=True)
+                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
             
             self.result.compat_settings_removed = total_removed
             self.result.bytes_saved += total_removed * 50
@@ -1112,7 +1117,7 @@ class DeepCleaner:
         
         try:
             ET.parse(ct_path)
-        except ET.ParseError as e:
+        except etree.XMLSyntaxError as e:
             self.result.errors.append(f"Invalid [Content_Types].xml: {e}")
             return False
         
@@ -1130,7 +1135,7 @@ class DeepCleaner:
         
         try:
             ET.parse(doc_path)
-        except ET.ParseError as e:
+        except etree.XMLSyntaxError as e:
             self.result.errors.append(f"Invalid document.xml: {e}")
             return False
         
