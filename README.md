@@ -10,9 +10,13 @@ Content-level cleaning that removes editorial/specifier content:
 - **Specifier notes** - Editorial comments like `[Specifier: ...]`, `NOTE TO SPECIFIER`, etc.
 - **Copyright notices** - Boilerplate copyright and licensing text
 - **Hidden text** - Content marked with Word's vanish property
-- **SpecAgent references** - Watermarks, footers, URLs from specagent.com
+- **SpecAgent references** – Visible watermarks, footers, and text-level URLs from specagent.com  
+  (Note: embedded hyperlinks and metadata are handled during deep clean)
+
 - **Editorial artifacts** - Placeholders like `<insert>`, `RETAIN OR DELETE`, `[TBD]`
-- **Unused styles** - Styles defined but never referenced in document content
+- **Unused styles** – Styles defined but never referenced in document content  
+  (content-aware removal; deeper orphan analysis is available with `--deep`)
+
 
 ### Deep Clean (`--deep`)
 ZIP/XML-level cleaning that removes accumulated cruft:
@@ -21,12 +25,14 @@ ZIP/XML-level cleaning that removes accumulated cruft:
 |----------|-------------------|-----------------|
 | **Orphaned Media** | Images in `word/media/` that nothing references | Variable (KB-MB) |
 | **Orphaned Styles** | Style definitions never used in document content | ~500 bytes each |
-| **RSID Attributes** | Revision tracking IDs on every element | ~25 bytes each, often 1000s per doc |
+| **RSID Tracking** | RSID attributes and RSID registries in settings.xml | ~25 bytes each, often 1000s per doc |
 | **Empty Elements** | Empty runs `<w:r/>`, empty properties `<w:rPr/>` | ~20 bytes each |
 | **Non-English Fonts** | Font mappings for Japanese, Arabic, Hebrew, etc. in theme | ~60 bytes each |
-| **Compat Settings** | Backwards compatibility for Word 97/2002/2003 | ~50 bytes each |
+| **Compat Settings** | Word compatibility behaviors and legacy layout rules | ~50 bytes each |
 | **Internal Bookmarks** | `_GoBack`, `_Hlk*`, `_Ref*` bookmarks | ~80 bytes each |
 | **Proof State** | Spell/grammar check state markers | ~40 bytes each |
+| **External Links (Domains)** | External hyperlink relationships and cached link metadata for specified domains (e.g. specagent.com) | Variable (often KBs) |
+
 
 ## Installation
 
@@ -98,6 +104,17 @@ Use these with `--deep` to selectively disable specific cleaning operations:
 | `--no-compat` | Keep backwards compatibility settings |
 | `--no-bookmarks` | Keep internal Word bookmarks |
 | `--no-proof` | Keep spell/grammar check state |
+| `--strip-links-domain DOMAIN` | Remove external hyperlinks and metadata for a given domain (repeatable) |
+| `--no-links` | Disable external link domain scrubbing |
+| `--aggressive-compat` | Remove entire `<w:compat>` block (higher risk, opt-in) |
+
+
+> ⚠ Aggressive Compatibility Removal  
+> `--aggressive-compat` removes the entire Word compatibility block.
+> This may affect layout consistency across Word versions.
+> Recommended only for finalized specifications.
+
+
 
 ### Examples
 
@@ -123,6 +140,17 @@ python speccleanse.py spec.docx out.docx --deep --no-fonts
 python speccleanse.py spec.docx out.docx --deep -q && echo "Success"
 ```
 
+# Remove all SpecAgent hyperlinks and metadata
+python speccleanse.py spec.docx out.docx --deep --strip-links-domain specagent.com
+
+# Remove multiple external domains
+python speccleanse.py spec.docx out.docx --deep \
+  --strip-links-domain specagent.com \
+  --strip-links-domain example.com
+
+
+
+
 ## How It Works
 
 ### Shallow Clean Pipeline
@@ -140,7 +168,7 @@ python speccleanse.py spec.docx out.docx --deep -q && echo "Success"
 2. **Compute Orphans** - Resources defined but never referenced
 3. **Scan Cruft** - RSIDs, empty elements, compatibility settings, etc.
 4. **Remove** - Delete orphaned files, strip attributes, clean XML
-5. **Validate** - Verify document structure is intact
+5. **Validate** – Ensure required relationships and core document structure remain intact
 6. **Repack** - Reconstruct DOCX with cleaned content
 
 ### Confidence Scoring
@@ -281,6 +309,20 @@ python diagnose.py input.docx -a
 python diagnose.py input.docx -e
 ```
 
+
+## Sanitization Use Cases
+
+SpecCleanse can also be used to sanitize DOCX files before issuing or archiving:
+
+- Remove embedded tracking identifiers (RSIDs)
+- Strip external hyperlink domains (e.g., vendor tracking URLs)
+- Remove authoring and compatibility metadata
+- Reduce document fingerprinting
+
+This is especially useful for issued-for-bid or issued-for-construction specifications.
+
+
+
 ## Common Specification Cruft
 
 Master spec templates (like MasterSpec, BSD SpecLink, ARCOM) often accumulate:
@@ -315,7 +357,9 @@ Master spec templates (like MasterSpec, BSD SpecLink, ARCOM) often accumulate:
 - Deep clean validates structure before completing
 
 **Still seeing SpecAgent references after deep clean**
-- If hyperlinks are still in content, run shallow clean first (default behavior)
+- Visible text or footers: ensure shallow clean ran (default behavior)
+- Clickable links or metadata: ensure `--strip-links-domain specagent.com` is enabled
+
 
 **File size didn't change much with deep clean**
 - Orphan removal typically saves a few KB
