@@ -98,11 +98,6 @@ class DeepCleanResult:
     media_removed: int = 0
     styles_removed: int = 0
     
-
-    # SpecAgent cleanup
-    specagent_relationships_removed: int = 0
-    specagent_hyperlinks_unwrapped: int = 0
-    specagent_hlinks_removed: int = 0
     # Cruft removed
     rsids_removed: int = 0
     empty_elements_removed: int = 0
@@ -111,6 +106,11 @@ class DeepCleanResult:
     bookmarks_removed: int = 0
     proof_elements_removed: int = 0
     
+    rsid_registry_removed: int = 0
+    compat_elements_removed: int = 0
+    external_link_rels_removed: int = 0
+    hyperlink_elements_unwrapped: int = 0
+    app_hlinks_removed: int = 0
     bytes_saved: int = 0
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -680,18 +680,21 @@ class DeepCleaner:
         'ct': 'http://schemas.openxmlformats.org/package/2006/content-types',
     }
     
-    def __init__(self, extract_dir: Path, orphan_report: OrphanReport, verbose: bool = False):
+    def __init__(self, extract_dir: Path, orphan_report: OrphanReport, verbose: bool = False, aggressive_compat: bool = False, scrub_link_domains: Optional[List[str]] = None):
         self.extract_dir = Path(extract_dir)
         self.orphan_report = orphan_report
         self.verbose = verbose
         self.result = DeepCleanResult()
         
+        self.aggressive_compat = aggressive_compat
+        self.scrub_link_domains = [d.lower() for d in (scrub_link_domains or [])]
     def clean(self,
               remove_media: bool = True,
               remove_styles: bool = True,
               strip_rsids: bool = True,
-              remove_specagent_links: bool = True,
+              remove_rsid_registry: bool = True,
               remove_empty_elements: bool = True,
+              scrub_external_links: bool = True,
               remove_non_english_fonts: bool = True,
               remove_compat_settings: bool = True,
               remove_internal_bookmarks: bool = True,
@@ -708,9 +711,8 @@ class DeepCleaner:
             if strip_rsids:
                 self._strip_rsids()
             
-            if remove_specagent_links:
-                self._remove_specagent_links()
-            
+            if remove_rsid_registry:
+                self._remove_rsid_registry()
             if remove_empty_elements:
                 self._remove_empty_elements()
             
@@ -720,6 +722,8 @@ class DeepCleaner:
             if remove_compat_settings:
                 self._remove_compatibility_settings()
             
+            if scrub_external_links and self.scrub_link_domains:
+                self._scrub_external_links(self.scrub_link_domains)
             if remove_internal_bookmarks:
                 self._remove_internal_bookmarks()
             
@@ -806,193 +810,161 @@ class DeepCleaner:
         self.result.bytes_saved += total_removed * 25
     
     
-    def _unwrap_element(self, elem: etree._Element) -> None:
-        """Replace an element with its children (preserving order).
+    def _remove_rsid_registry(self):
+        """Remove <w:rsids> registry block from word/settings.xml.
 
-        This is used to "unlink" hyperlinks while preserving their visible text.
+        This is safe after RSID attributes have been stripped, and reduces file bloat.
         """
-        parent = elem.getparent()
-        if parent is None:
+        settings_path = self.extract_dir / "word" / "settings.xml"
+        if not settings_path.exists():
             return
 
-        # Preserve tail whitespace/text if present
-        tail = elem.tail
-        children = list(elem)
-        insert_at = parent.index(elem)
+        w_ns = self.NAMESPACES['w']
 
-        for child in children:
-            parent.insert(insert_at, child)
-            insert_at += 1
+        try:
+            parser = etree.XMLParser(remove_blank_text=False)
+            tree = etree.parse(str(settings_path), parser)
+            root = tree.getroot()
 
-        parent.remove(elem)
+            removed = 0
+            for rsids in list(root.findall(f'.//{{{w_ns}}}rsids')):
+                parent = rsids.getparent()
+                if parent is not None:
+                    parent.remove(rsids)
+                    removed += 1
 
-        # Re-attach tail to the last inserted child (or previous sibling / parent)
-        if tail:
-            if children:
-                children[-1].tail = (children[-1].tail or "") + tail
-            else:
-                # No children: attach tail to previous sibling if possible
-                prev = None
-                if insert_at - 1 >= 0 and insert_at - 1 < len(parent):
-                    prev = parent[insert_at - 1]
-                if prev is not None:
-                    prev.tail = (prev.tail or "") + tail
-                else:
-                    parent.text = (parent.text or "") + tail
+            if removed:
+                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
+                self.result.rsid_registry_removed = removed
+                self.result.bytes_saved += removed * 500  # heuristic
 
-    def _remove_specagent_links(self, domains: tuple[str, ...] = ("specagent.com",)) -> None:
-        """Remove SpecAgent.com references that can survive shallow cleaning.
+        except Exception as e:
+            self.result.warnings.append(f"Failed to remove rsid registry: {e}")
 
-        Targets:
-        - External hyperlink relationships (e.g., word/_rels/document.xml.rels)
-        - w:hyperlink elements that point at those relationships (unwrap to keep visible text)
-        - docProps/app.xml HLinks cache (often huge, may contain thousands of SpecAgent URLs)
+    def _scrub_external_links(self, domains: List[str]):
+        """Remove external hyperlink relationships whose target matches any domain.
+
+        - Deletes matching Relationship entries from *.rels (TargetMode=External)
+        - Unwraps <w:hyperlink r:id="..."> elements that referenced removed rIds
+        - Removes cached hyperlink list from docProps/app.xml when it contains matching domains
+
+        This targets lingering vendor/tracking links (e.g., specagent.com) that may survive shallow clean.
         """
-        parser = etree.XMLParser(remove_blank_text=False)
-        ns = self.analyzer.NAMESPACES
-        w_ns = ns.get('w')
-        r_ns = ns.get('r')
-        relpkg_ns = ns.get('rel')  # package relationships namespace
+        domains = [d.lower() for d in domains if d]
+        if not domains:
+            return
 
-        # Case-insensitive domain match
-        domain_pattern = re.compile("|".join(re.escape(d) for d in domains), re.IGNORECASE)
-
-        # ---------------------------------------------------------------------
-        # 1) docProps/app.xml: remove HLinks blocks containing SpecAgent URLs
-        # ---------------------------------------------------------------------
-        app_xml = self.extract_dir / "docProps" / "app.xml"
-        if app_xml.exists():
+        # 1) Scrub hyperlink cache in docProps/app.xml (Extended Properties)
+        app_path = self.extract_dir / "docProps" / "app.xml"
+        if app_path.exists():
             try:
-                before = app_xml.stat().st_size
-                tree = etree.parse(str(app_xml), parser)
+                parser = etree.XMLParser(remove_blank_text=False)
+                tree = etree.parse(str(app_path), parser)
                 root = tree.getroot()
+                removed_any = False
 
-                removed_hlinks = 0
-                for hlinks in root.xpath('//*[local-name()="HLinks"]'):
-                    # Only remove if it actually contains the domain
-                    blob = etree.tostring(hlinks, encoding="unicode", with_tail=False)
-                    if domain_pattern.search(blob):
+                # HLinks element is in extended properties namespace, but we can match by localname
+                for hlinks in list(root.findall('.//*[local-name()="HLinks"]')):
+                    serialized = etree.tostring(hlinks, encoding='unicode')
+                    if any(d in serialized.lower() for d in domains):
                         parent = hlinks.getparent()
                         if parent is not None:
                             parent.remove(hlinks)
-                            removed_hlinks += 1
+                            removed_any = True
+                if removed_any:
+                    tree.write(str(app_path), xml_declaration=True, encoding='UTF-8')
+                    self.result.app_hlinks_removed += 1
+                    self.result.bytes_saved += 10_000  # heuristic, often huge
 
-                if removed_hlinks:
-                    tree.write(str(app_xml), xml_declaration=True, encoding="UTF-8", standalone=True)
-                    after = app_xml.stat().st_size
-                    self.result.bytes_saved += max(0, before - after)
-                    self.result.specagent_hlinks_removed += removed_hlinks
-                    self._debug(f"Removed {removed_hlinks} SpecAgent HLinks block(s) from docProps/app.xml")
             except Exception as e:
-                self.result.warnings.append(f"SpecAgent cleanup: failed to process {app_xml}: {e}")
+                self.result.warnings.append(f"Failed to scrub app.xml HLinks: {e}")
 
-        # ---------------------------------------------------------------------
-        # 2) Remove SpecAgent hyperlink relationships from *.rels files
-        #    and track removed rIds by source part so we can unlink them.
-        # ---------------------------------------------------------------------
-        removed_rids_by_part: dict[Path, set[str]] = {}
+        # Helper: map rels file -> owning part
+        def owning_part_for_rels(rels_rel_path: str) -> Optional[Path]:
+            # e.g. word/_rels/document.xml.rels -> word/document.xml
+            rels_rel_path = rels_rel_path.replace('\\', '/')
+            if '/_rels/' not in rels_rel_path:
+                return None
+            base = rels_rel_path.replace('/_rels/', '/')
+            if base.endswith('.rels'):
+                base = base[:-5]
+            return self.extract_dir / base
 
-        for rels_path in self.extract_dir.rglob('*.rels'):
+        rel_ns = self.NAMESPACES['rel']
+        r_ns = self.NAMESPACES['r']
+        w_ns = self.NAMESPACES['w']
+
+        # 2) Scrub all *.rels files
+        for rels_file in self.extract_dir.rglob('*.rels'):
+            rels_rel_path = str(rels_file.relative_to(self.extract_dir)).replace('\\', '/')
             try:
-                tree = etree.parse(str(rels_path), parser)
+                parser = etree.XMLParser(remove_blank_text=False)
+                tree = etree.parse(str(rels_file), parser)
                 root = tree.getroot()
 
-                removed_ids: set[str] = set()
+                removed_rids: List[str] = []
+                removed_count = 0
 
-                # Relationships elements are in the package relationships namespace
-                for rel in root.findall(f'.//{{{relpkg_ns}}}Relationship'):
-                    target = rel.get('Target', '') or ''
-                    if target and domain_pattern.search(target):
-                        rid = rel.get('Id')
+                for rel in list(root.findall(f'{{{rel_ns}}}Relationship')):
+                    target_mode = (rel.get('TargetMode') or 'Internal')
+                    if target_mode != 'External':
+                        continue
+                    rel_type = rel.get('Type') or ''
+                    if 'relationships/hyperlink' not in rel_type:
+                        continue
+
+                    target = (rel.get('Target') or '')
+                    if any(d in target.lower() for d in domains):
+                        rid = rel.get('Id') or ''
                         if rid:
-                            removed_ids.add(rid)
-                        parent = rel.getparent()
-                        if parent is not None:
-                            parent.remove(rel)
+                            removed_rids.append(rid)
+                        root.remove(rel)
+                        removed_count += 1
 
-                if removed_ids:
-                    before = rels_path.stat().st_size
-                    tree.write(str(rels_path), xml_declaration=True, encoding="UTF-8", standalone=True)
-                    after = rels_path.stat().st_size
+                if removed_count:
+                    tree.write(str(rels_file), xml_declaration=True, encoding='UTF-8')
+                    self.result.external_link_rels_removed += removed_count
+                    self.result.bytes_saved += removed_count * 200  # heuristic
 
-                    self.result.bytes_saved += max(0, before - after)
-                    self.result.specagent_relationships_removed += len(removed_ids)
+                    # 3) Unwrap <w:hyperlink r:id="..."> in owning part
+                    owning_part = owning_part_for_rels(rels_rel_path)
+                    if owning_part is not None and owning_part.exists():
+                        try:
+                            part_tree = etree.parse(str(owning_part), parser)
+                            part_root = part_tree.getroot()
+                            modified = False
 
-                    # Map rels -> source part (skip package-level _rels/.rels)
-                    if rels_path.name != '.rels':
-                        part_name = rels_path.name[:-5]  # strip trailing '.rels'
-                        source_part = rels_path.parent.parent / part_name
-                        if source_part.exists() and source_part.suffix.lower() == '.xml':
-                            removed_rids_by_part.setdefault(source_part, set()).update(removed_ids)
+                            for hl in list(part_root.findall(f'.//{{{w_ns}}}hyperlink')):
+                                rid = hl.get(f'{{{r_ns}}}id')
+                                if rid and rid in removed_rids:
+                                    parent = hl.getparent()
+                                    if parent is None:
+                                        continue
 
-                    self._debug(f"Removed {len(removed_ids)} SpecAgent relationship(s) from {rels_path}")
+                                    insert_at = parent.index(hl)
+                                    # Move children out of hyperlink wrapper
+                                    for child in list(hl):
+                                        parent.insert(insert_at, child)
+                                        insert_at += 1
+                                    # Preserve tail
+                                    if hl.tail:
+                                        prev = parent[insert_at-1] if insert_at-1 < len(parent) else None
+                                        if prev is not None:
+                                            prev.tail = (prev.tail or '') + hl.tail
+                                        else:
+                                            parent.text = (parent.text or '') + hl.tail
+                                    parent.remove(hl)
+                                    self.result.hyperlink_elements_unwrapped += 1
+                                    modified = True
+
+                            if modified:
+                                part_tree.write(str(owning_part), xml_declaration=True, encoding='UTF-8')
+
+                        except Exception as e:
+                            self.result.warnings.append(f"Failed to unwrap hyperlinks in {owning_part.name}: {e}")
+
             except Exception as e:
-                self.result.warnings.append(f"SpecAgent cleanup: failed to process {rels_path}: {e}")
-
-        # ---------------------------------------------------------------------
-        # 3) Unlink references in source parts (unwrap w:hyperlink; strip r:id elsewhere)
-        # ---------------------------------------------------------------------
-        if removed_rids_by_part and w_ns and r_ns:
-            rid_attr = f'{{{r_ns}}}id'
-            w_hyperlink_tag = f'{{{w_ns}}}hyperlink'
-
-            for part_path, removed_ids in removed_rids_by_part.items():
-                try:
-                    tree = etree.parse(str(part_path), parser)
-                    root = tree.getroot()
-                    before = part_path.stat().st_size
-
-                    unwrapped = 0
-                    attr_stripped = 0
-
-                    # Any element with r:id
-                    for elem in root.xpath('//*[@r:id]', namespaces=ns):
-                        rid = elem.get(rid_attr)
-                        if rid in removed_ids:
-                            if elem.tag == w_hyperlink_tag:
-                                self._unwrap_element(elem)
-                                unwrapped += 1
-                            else:
-                                # Remove the relationship reference but keep the element
-                                if rid_attr in elem.attrib:
-                                    del elem.attrib[rid_attr]
-                                    attr_stripped += 1
-
-                    if unwrapped or attr_stripped:
-                        tree.write(str(part_path), xml_declaration=True, encoding="UTF-8", standalone=True)
-                        after = part_path.stat().st_size
-                        self.result.bytes_saved += max(0, before - after)
-
-                    if unwrapped:
-                        self.result.specagent_hyperlinks_unwrapped += unwrapped
-
-                    if unwrapped or attr_stripped:
-                        self._debug(
-                            f"Unlinked SpecAgent relationships in {part_path} (hyperlinks unwrapped={unwrapped}, r:id stripped={attr_stripped})"
-                        )
-                except Exception as e:
-                    self.result.warnings.append(f"SpecAgent cleanup: failed to unlink in {part_path}: {e}")
-
-        # ---------------------------------------------------------------------
-        # 4) Post-check: warn if any XML/RELS still contains the domain
-        # ---------------------------------------------------------------------
-        leftovers = []
-        for path in self.extract_dir.rglob('*'):
-            if path.is_file() and path.suffix.lower() in ('.xml', '.rels'):
-                try:
-                    content = path.read_text(errors='ignore')
-                    if domain_pattern.search(content):
-                        leftovers.append(str(path.relative_to(self.extract_dir)))
-                except Exception:
-                    # Ignore unreadable files
-                    continue
-
-        if leftovers:
-            # Keep warning small; show first few
-            preview = ", ".join(leftovers[:10])
-            more = "" if len(leftovers) <= 10 else f" (+{len(leftovers)-10} more)"
-            self.result.warnings.append(f"SpecAgent references still found in: {preview}{more}")
-
+                self.result.warnings.append(f"Failed to scrub rels {rels_rel_path}: {e}")
     def _remove_empty_elements(self):
         """Remove empty runs and other useless elements."""
         w_ns = self.NAMESPACES['w']
@@ -1089,16 +1061,21 @@ class DeepCleaner:
         self.result.bytes_saved += total_removed * 60
     
     def _remove_compatibility_settings(self):
-        """Remove backwards compatibility settings from settings.xml."""
+        """Remove backwards compatibility settings from settings.xml.
+
+        Modes:
+        - default: remove a known-safe set of legacy compat tags (existing behavior)
+        - aggressive (self.aggressive_compat=True): remove entire <w:compat> blocks
+        """
         settings_path = self.extract_dir / "word" / "settings.xml"
         if not settings_path.exists():
             return
-        
+
         w_ns = self.NAMESPACES['w']
-        
+
         removable_tags = {
             'compatSetting', 'useFELayout', 'useWord2002TableStyleRules',
-            'growAutofit', 'useWord97LineBreakRules', 
+            'growAutofit', 'useWord97LineBreakRules',
             'doNotUseIndentAsNumberingTabStop', 'useAltKinsokuLineBreakRules',
             'allowSpaceOfSameStyleInTable', 'doNotSuppressParagraphBorders',
             'doNotAutofitConstrainedTables', 'autofitToFirstFixedWidthCell',
@@ -1106,33 +1083,49 @@ class DeepCleaner:
             'doNotVertAlignCellWithSp', 'doNotBreakConstrainedForcedTable',
             'doNotVertAlignInTxbx', 'useAnsiKerningPairs', 'cachedColBalance',
         }
-        
+
         try:
             parser = etree.XMLParser(remove_blank_text=False)
             tree = etree.parse(str(settings_path), parser)
             root = tree.getroot()
+
             total_removed = 0
-            
+            compat_elements_removed = 0
+
+            # Aggressive: remove entire <w:compat> blocks
+            if self.aggressive_compat:
+                for compat in list(root.findall(f'.//{{{w_ns}}}compat')):
+                    parent = compat.getparent()
+                    if parent is not None:
+                        parent.remove(compat)
+                        compat_elements_removed += 1
+                if compat_elements_removed:
+                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
+                self.result.compat_elements_removed = compat_elements_removed
+                # estimate: assume ~200 bytes per compat block (varies); conservative
+                self.result.bytes_saved += compat_elements_removed * 200
+                return
+
+            # Default: remove selected legacy compat children
             for compat in root.iter(f'{{{w_ns}}}compat'):
                 children_to_remove = []
                 for child in compat:
                     tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
                     if tag in removable_tags:
                         children_to_remove.append(child)
-                
+
                 for child in children_to_remove:
                     compat.remove(child)
                     total_removed += 1
-            
+
             if total_removed > 0:
                 tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
-            
+
             self.result.compat_settings_removed = total_removed
             self.result.bytes_saved += total_removed * 50
-        
+
         except Exception as e:
             self.result.warnings.append(f"Failed to remove compat settings: {e}")
-    
     def _remove_internal_bookmarks(self):
         """Remove Word's internal bookmarks."""
         doc_path = self.extract_dir / "word" / "document.xml"
@@ -1285,12 +1278,15 @@ def analyze_and_clean(
     remove_media: bool = True,
     remove_styles: bool = True,
     strip_rsids: bool = True,
-    remove_specagent_links: bool = True,
     remove_empty_elements: bool = True,
     remove_non_english_fonts: bool = True,
     remove_compat_settings: bool = True,
     remove_internal_bookmarks: bool = True,
     remove_proof_state: bool = True,
+    remove_rsid_registry: bool = True,
+    aggressive_compat: bool = False,
+    scrub_external_links: bool = True,
+    scrub_link_domains: Optional[List[str]] = None,
     verbose: bool = False
 ) -> DeepCleanResult:
     """
@@ -1328,14 +1324,15 @@ def analyze_and_clean(
         remove_media=remove_media,
         remove_styles=remove_styles,
         strip_rsids=strip_rsids,
-        remove_specagent_links=remove_specagent_links,
+        remove_rsid_registry=remove_rsid_registry,
         remove_empty_elements=remove_empty_elements,
         remove_non_english_fonts=remove_non_english_fonts,
         remove_compat_settings=remove_compat_settings,
+        scrub_external_links=scrub_external_links,
         remove_internal_bookmarks=remove_internal_bookmarks,
         remove_proof_state=remove_proof_state,
     )
-    
+
     return result
 
 
