@@ -142,6 +142,7 @@ def print_result(result: ProcessingResult, verbose: bool = False,
         print(f"    Compat settings:     {deep_result.compat_settings_removed}")
         print(f"    Internal bookmarks:  {deep_result.bookmarks_removed}")
         print(f"    Proof state:         {deep_result.proof_elements_removed}")
+        print(f"    SpecAgent links:     {deep_result.specagent_relationships_removed} rels, {deep_result.specagent_hyperlinks_unwrapped} unlinked, {deep_result.specagent_hlinks_removed} HLinks")
         print()
         print(f"  Estimated bytes saved: {deep_result.bytes_saved:,} ({deep_result.bytes_saved/1024:.1f} KB)")
         
@@ -209,6 +210,7 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
             'remove_media': False,
             'remove_styles': False,
             'strip_rsids': False,
+            'remove_specagent_links': False,
             'remove_empty_elements': False,
             'remove_non_english_fonts': False,
             'remove_compat_settings': False,
@@ -220,6 +222,7 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
             'media': 'remove_media',
             'styles': 'remove_styles',
             'rsids': 'strip_rsids',
+            'specagent': 'remove_specagent_links',
             'empty': 'remove_empty_elements',
             'fonts': 'remove_non_english_fonts',
             'compat': 'remove_compat_settings',
@@ -239,6 +242,7 @@ def run_deep_clean(unpacked_dir: Path, args, verbose: bool = False):
             'remove_media': not args.no_media,
             'remove_styles': not args.no_deep_styles,
             'strip_rsids': not args.no_rsids,
+            'remove_specagent_links': not args.no_specagent,
             'remove_empty_elements': not args.no_empty,
             'remove_non_english_fonts': not args.no_fonts,
             'remove_compat_settings': not args.no_compat,
@@ -366,7 +370,7 @@ Deep Clean (--deep):
 
     deep_group.add_argument(
         "--only",
-        choices=['media', 'styles', 'rsids', 'empty', 'fonts', 'compat', 'bookmarks', 'proof'],
+        choices=['media', 'styles', 'rsids', 'specagent', 'empty', 'fonts', 'compat', 'bookmarks', 'proof'],
         help="Run ONLY this single deep clean operation (for debugging)"
     )
     
@@ -386,6 +390,12 @@ Deep Clean (--deep):
         "--no-rsids",
         action="store_true",
         help="Skip stripping RSID tracking attributes"
+    )
+
+    deep_group.add_argument(
+        "--no-specagent",
+        action="store_true",
+        help="Skip removing SpecAgent.com links/metadata (relationships, HLinks)"
     )
     
     deep_group.add_argument(
