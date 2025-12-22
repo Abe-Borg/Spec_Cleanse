@@ -22,7 +22,7 @@ import yaml
 
 from detection import DetectionEngine, ContentType
 from processor import DocxProcessor, ProcessingResult
-from style_cleaner import StyleCleaner, StyleCleanResult 
+from style_cleaner import StyleCleaner, StyleCleanResult
 
 
 def load_config(config_path: Path) -> dict:
