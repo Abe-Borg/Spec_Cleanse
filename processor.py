@@ -31,6 +31,17 @@ W_NS = NAMESPACES["w"]
 W = f"{{{W_NS}}}"
 
 
+def repack_docx(unpacked_dir: Path, output_path: Path):
+    """Repack an unpacked directory into a DOCX (ZIP) file."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dirs, files in os.walk(unpacked_dir):
+            for file in files:
+                file_path = Path(root) / file
+                arcname = file_path.relative_to(unpacked_dir)
+                zf.write(file_path, arcname)
+
+
 @dataclass
 class ProcessingResult:
     """Results from processing a document."""
@@ -148,15 +159,7 @@ class DocxProcessor:
     
     def _repack_docx(self, unpacked_dir: Path, output_path: Path):
         """Repack directory into DOCX."""
-        # Ensure output directory exists
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for root, dirs, files in os.walk(unpacked_dir):
-                for file in files:
-                    file_path = Path(root) / file
-                    arcname = file_path.relative_to(unpacked_dir)
-                    zf.write(file_path, arcname)
+        repack_docx(unpacked_dir, output_path)
     
     def _process_xml_file(self, xml_path: Path, dry_run: bool) -> list[Detection]:
         """Process an XML file, returning detections and optionally modifying."""
@@ -298,64 +301,3 @@ class DocxProcessor:
         return "".join(texts)
 
 
-class HeaderFooterProcessor:
-    """
-    Specialized processor for headers and footers.
-    These often contain watermarks and persistent copyright notices.
-    """
-    
-    def __init__(self, engine: DetectionEngine):
-        self.engine = engine
-    
-    def process_headers_footers(self, unpacked_dir: Path, dry_run: bool) -> list[Detection]:
-        """Process all headers and footers in document."""
-        detections = []
-        word_dir = unpacked_dir / "word"
-        
-        # Process headers
-        for header_path in word_dir.glob("header*.xml"):
-            header_detections = self._process_hf_file(header_path, dry_run)
-            detections.extend(header_detections)
-        
-        # Process footers
-        for footer_path in word_dir.glob("footer*.xml"):
-            footer_detections = self._process_hf_file(footer_path, dry_run)
-            detections.extend(footer_detections)
-        
-        return detections
-    
-    def _process_hf_file(self, path: Path, dry_run: bool) -> list[Detection]:
-        """Process a single header/footer file."""
-        detections = []
-        
-        parser = etree.XMLParser(remove_blank_text=False)
-        tree = etree.parse(str(path), parser)
-        root = tree.getroot()
-        
-        elements_to_remove = []
-        
-        for para in root.iter(f"{W}p"):
-            para_text = self._get_text(para)
-            para_detections = self.engine.detect_in_element(para, para_text)
-            detections.extend(para_detections)
-            
-            if self.engine.should_remove(para_detections):
-                elements_to_remove.append(para)
-        
-        if not dry_run:
-            for elem in elements_to_remove:
-                parent = elem.getparent()
-                if parent is not None:
-                    parent.remove(elem)
-            
-            tree.write(str(path), xml_declaration=True, encoding="UTF-8", standalone=True)
-        
-        return detections
-    
-    def _get_text(self, elem: etree._Element) -> str:
-        """Extract all text from element."""
-        texts = []
-        for t in elem.iter(f"{W}t"):
-            if t.text:
-                texts.append(t.text)
-        return "".join(texts)
