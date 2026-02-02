@@ -49,8 +49,8 @@ pip install lxml pyyaml
 
 ### Setup
 
-1. Clone or download the `speccleanse` directory
-2. Install dependencies: `pip install lxml pyyaml`
+1. Clone or download this repository
+2. Install dependencies: `pip install -r requirements.txt`
 3. Run: `python speccleanse.py input.docx output.docx`
 
 ## Usage
@@ -284,14 +284,16 @@ Content in `document.xml` references external resources via `rId` attributes:
 ## File Structure
 
 ```
-speccleanse/
-├── speccleanse.py     # CLI entry point
-├── detection.py       # Detection engine and detectors
-├── processor.py       # DOCX content processing logic
-├── style_cleaner.py   # Unused style detection and removal
+Spec_Cleanse/
+├── speccleanse.py     # CLI entry point and orchestration
+├── detection.py       # Detection engine and detector classes
+├── processor.py       # DOCX unpacking/repacking and content removal
 ├── deep_cleaner.py    # Orphan analysis and deep cleaning
-├── patterns.yaml      # Configurable detection patterns
+├── style_cleaner.py   # Unused style detection and removal
 ├── diagnose.py        # Diagnostic tool for inspecting documents
+├── patterns.yaml      # Configurable detection patterns
+├── requirements.txt   # Pinned Python dependencies
+├── CLAUDE.md          # AI assistant guide for the codebase
 └── README.md          # This file
 ```
 
@@ -381,6 +383,8 @@ To add new detection types:
 1. Add patterns to `patterns.yaml`
 2. Create detector class in `detection.py` (extend `BaseDetector`)
 3. Register in `DetectionEngine._create_detectors()`
+
+See `CLAUDE.md` for a detailed codebase guide covering architecture, conventions, and common modification scenarios.
 
 ## License
 
