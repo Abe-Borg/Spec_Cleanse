@@ -45,13 +45,6 @@ copyright_notices:
     - 'licensed\s+for\s+use\s+by'
     - 'duplication.*?prohibited'
     - 'unauthorized.*?reproduction'
-    
-  # Copyright often appears in specific locations
-  location_boost:
-    - first_paragraph
-    - last_paragraph
-    - header
-    - footer
 
 hidden_text:
   enabled: true
@@ -71,12 +64,6 @@ specagent_references:
     - 'www\.specagent'
     - 'produced\s+by\s+specagent'
     - 'generated\s+by\s+specagent'
-    
-  # Also check these locations specifically
-  check_locations:
-    - header
-    - footer
-    - watermark
 
 editorial_artifacts:
   enabled: true

@@ -25,12 +25,8 @@ from typing import Dict, List, Set, Optional
 class OrphanReport:
     """Structured report of orphaned resources and cleanable cruft."""
     # Orphaned resources
-    orphaned_relationships: List[Dict] = field(default_factory=list)
     orphaned_media: List[Dict] = field(default_factory=list)
     orphaned_styles: List[Dict] = field(default_factory=list)
-    orphaned_fonts: List[Dict] = field(default_factory=list)
-    orphaned_numbering: List[Dict] = field(default_factory=list)
-    orphaned_web_divs: List[Dict] = field(default_factory=list)
     
     # Cruft to strip
     rsid_attributes: Dict = field(default_factory=dict)  # {file: count}
@@ -58,9 +54,6 @@ class OrphanReport:
             'orphans': {
                 'media': self.orphaned_media,
                 'styles': self.orphaned_styles,
-                'fonts': self.orphaned_fonts,
-                'numbering': self.orphaned_numbering,
-                'web_divs': self.orphaned_web_divs,
             },
             'cruft': {
                 'rsid_attributes': self.rsid_attributes,
@@ -94,7 +87,6 @@ class DeepCleanResult:
     success: bool = False
     
     # Orphans removed
-    relationships_removed: int = 0
     media_removed: int = 0
     styles_removed: int = 0
     
@@ -434,12 +426,15 @@ class OrphanAnalyzer:
             elif 'media/' in target:
                 referenced_media.add(target)
         
+        # Build a set of referenced filenames for exact matching
+        referenced_filenames = set()
+        for ref in referenced_media:
+            referenced_filenames.add(ref.replace('\\', '/').split('/')[-1])
+
         for media_path, size in self._defined_media.items():
             normalized = media_path.replace('\\', '/')
-            is_referenced = any(
-                normalized.endswith(ref.split('/')[-1]) 
-                for ref in referenced_media
-            )
+            filename = normalized.split('/')[-1]
+            is_referenced = filename in referenced_filenames
             
             if not is_referenced:
                 self.report.orphaned_media.append({
@@ -474,21 +469,24 @@ class OrphanAnalyzer:
     
     def _scan_for_empty_elements(self):
         """Scan for empty runs and other useless elements."""
+        word_dir = self.extract_dir / "word"
         xml_files_to_scan = [
-            'word/document.xml',
-            'word/styles.xml',
-            'word/header1.xml', 'word/header2.xml', 'word/header3.xml',
-            'word/footer1.xml', 'word/footer2.xml', 'word/footer3.xml',
-            'word/footnotes.xml', 'word/endnotes.xml',
+            word_dir / "document.xml",
+            word_dir / "styles.xml",
+            word_dir / "footnotes.xml",
+            word_dir / "endnotes.xml",
         ]
-        
+        xml_files_to_scan.extend(word_dir.glob("header*.xml"))
+        xml_files_to_scan.extend(word_dir.glob("footer*.xml"))
+
         total_empty = 0
         w_ns = self.NAMESPACES['w']
-        
-        for rel_path in xml_files_to_scan:
-            xml_file = self.extract_dir / rel_path
+
+        for xml_file in xml_files_to_scan:
+            xml_file = Path(xml_file)
             if not xml_file.exists():
                 continue
+            rel_path = str(xml_file.relative_to(self.extract_dir))
             
             root = self._parse_xml(xml_file)
             if root is None:
@@ -778,7 +776,7 @@ class DeepCleaner:
                     removed += 1
             
             if removed > 0:
-                tree.write(str(styles_path), xml_declaration=True, encoding='UTF-8')
+                tree.write(str(styles_path), xml_declaration=True, encoding='UTF-8', standalone=True)
 
                 self.result.styles_removed = removed
         
@@ -834,7 +832,7 @@ class DeepCleaner:
                     removed += 1
 
             if removed:
-                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
+                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
                 self.result.rsid_registry_removed = removed
                 self.result.bytes_saved += removed * 500  # heuristic
 
@@ -872,7 +870,7 @@ class DeepCleaner:
                             parent.remove(hlinks)
                             removed_any = True
                 if removed_any:
-                    tree.write(str(app_path), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(app_path), xml_declaration=True, encoding='UTF-8', standalone=True)
                     self.result.app_hlinks_removed += 1
                     self.result.bytes_saved += 10_000  # heuristic, often huge
 
@@ -922,7 +920,7 @@ class DeepCleaner:
                         removed_count += 1
 
                 if removed_count:
-                    tree.write(str(rels_file), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(rels_file), xml_declaration=True, encoding='UTF-8', standalone=True)
                     self.result.external_link_rels_removed += removed_count
                     self.result.bytes_saved += removed_count * 200  # heuristic
 
@@ -958,7 +956,7 @@ class DeepCleaner:
                                     modified = True
 
                             if modified:
-                                part_tree.write(str(owning_part), xml_declaration=True, encoding='UTF-8')
+                                part_tree.write(str(owning_part), xml_declaration=True, encoding='UTF-8', standalone=True)
 
                         except Exception as e:
                             self.result.warnings.append(f"Failed to unwrap hyperlinks in {owning_part.name}: {e}")
@@ -968,19 +966,19 @@ class DeepCleaner:
     def _remove_empty_elements(self):
         """Remove empty runs and other useless elements."""
         w_ns = self.NAMESPACES['w']
-        
-        xml_files = [
-            'word/document.xml',
-            'word/header1.xml', 'word/header2.xml', 'word/header3.xml',
-            'word/footer1.xml', 'word/footer2.xml', 'word/footer3.xml',
-        ]
-        
+
+        word_dir = self.extract_dir / "word"
+        xml_files = [word_dir / "document.xml"]
+        xml_files.extend(word_dir.glob("header*.xml"))
+        xml_files.extend(word_dir.glob("footer*.xml"))
+
         total_removed = 0
-        
-        for rel_path in xml_files:
-            xml_file = self.extract_dir / rel_path
+
+        for xml_file in xml_files:
+            xml_file = Path(xml_file)
             if not xml_file.exists():
                 continue
+            rel_path = str(xml_file.relative_to(self.extract_dir))
             
             try:
                 parser = etree.XMLParser(remove_blank_text = False)
@@ -1010,7 +1008,7 @@ class DeepCleaner:
                         modified = True
                 
                 if modified:
-                    tree.write(str(xml_file), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(xml_file), xml_declaration=True, encoding='UTF-8', standalone=True)
 
             
             except Exception as e:
@@ -1051,7 +1049,7 @@ class DeepCleaner:
                         modified = True
                 
                 if modified:
-                    tree.write(str(theme_file), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(theme_file), xml_declaration=True, encoding='UTF-8', standalone=True)
 
             
             except Exception as e:
@@ -1100,7 +1098,7 @@ class DeepCleaner:
                         parent.remove(compat)
                         compat_elements_removed += 1
                 if compat_elements_removed:
-                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
                 self.result.compat_elements_removed = compat_elements_removed
                 # estimate: assume ~200 bytes per compat block (varies); conservative
                 self.result.bytes_saved += compat_elements_removed * 200
@@ -1119,7 +1117,7 @@ class DeepCleaner:
                     total_removed += 1
 
             if total_removed > 0:
-                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
+                tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
 
             self.result.compat_settings_removed = total_removed
             self.result.bytes_saved += total_removed * 50
@@ -1166,7 +1164,7 @@ class DeepCleaner:
                     bookmarks_removed += 1
             
             if bookmarks_removed:
-                tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8')
+                tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8', standalone=True)
 
             self.result.bookmarks_removed = bookmarks_removed // 2
             self.result.bytes_saved += self.result.bookmarks_removed * 80
@@ -1199,7 +1197,7 @@ class DeepCleaner:
                         total_removed += 1
                 
                 if total_removed > 0:
-                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
 
             
             except Exception as e:
@@ -1225,7 +1223,7 @@ class DeepCleaner:
                         doc_removed += 1
                 
                 if doc_removed > 0:
-                    tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8')
+                    tree.write(str(doc_path), xml_declaration=True, encoding='UTF-8', standalone=True)
                     total_removed += doc_removed
             
             except Exception as e:
@@ -1319,7 +1317,9 @@ def analyze_and_clean(
         print(f"    Found {orphan_report.total_rsid_attributes} RSID attributes")
     
     # Phase 2: Deep clean
-    cleaner = DeepCleaner(unpacked_dir, orphan_report, verbose=verbose)
+    cleaner = DeepCleaner(unpacked_dir, orphan_report, verbose=verbose,
+                          aggressive_compat=aggressive_compat,
+                          scrub_link_domains=scrub_link_domains)
     result = cleaner.clean(
         remove_media=remove_media,
         remove_styles=remove_styles,

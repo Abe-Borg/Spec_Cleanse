@@ -15,10 +15,10 @@ SpecCleanse is a Python CLI tool that removes unnecessary content from specifica
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `speccleanse.py` | ~620 | CLI entry point, argument parsing, orchestration |
+| `speccleanse.py` | ~590 | CLI entry point, argument parsing, orchestration |
 | `detection.py` | ~405 | Pattern matching engine with confidence scoring; all detector classes |
-| `processor.py` | ~360 | DOCX unpacking, XML content walking, element removal, repacking |
-| `deep_cleaner.py` | ~1350 | Orphan analysis, RSID stripping, cruft removal at ZIP/XML level |
+| `processor.py` | ~310 | DOCX unpacking/repacking (`repack_docx` utility), XML content walking, element removal |
+| `deep_cleaner.py` | ~1360 | Orphan analysis, RSID stripping, cruft removal at ZIP/XML level |
 | `style_cleaner.py` | ~315 | Unused style detection via dependency graph analysis |
 | `diagnose.py` | ~305 | Standalone diagnostic utility for inspecting document formatting |
 
@@ -188,6 +188,7 @@ python diagnose.py input.docx -e
 | `--quiet` / `-q` | Suppress output except errors |
 | `--no-media`, `--no-rsids`, etc. | Selectively disable deep-clean operations |
 | `--strip-links-domain DOMAIN` | Remove hyperlinks for specific domains |
+| `--only OPERATION` | Run only a single deep-clean operation (for debugging) |
 
 ## Testing
 

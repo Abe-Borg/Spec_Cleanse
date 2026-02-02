@@ -11,7 +11,6 @@ Features:
 """
 
 import argparse
-import os
 import shutil
 import sys
 import tempfile
@@ -21,7 +20,7 @@ from pathlib import Path
 import yaml
 
 from detection import DetectionEngine, ContentType
-from processor import DocxProcessor, ProcessingResult
+from processor import DocxProcessor, ProcessingResult, repack_docx
 from style_cleaner import StyleCleaner, StyleCleanResult 
 
 
@@ -542,13 +541,7 @@ Deep Clean (--deep):
             
             # Repack if not dry run
             if not args.dry_run:
-                args.output.parent.mkdir(parents=True, exist_ok=True)
-                with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as zf:
-                    for root, dirs, files in os.walk(unpacked):
-                        for file in files:
-                            file_path = Path(root) / file
-                            arcname = file_path.relative_to(unpacked)
-                            zf.write(file_path, arcname)
+                repack_docx(unpacked, args.output)
         else:
             # Normal shallow content processing
             result = processor.process(
@@ -570,14 +563,7 @@ Deep Clean (--deep):
                         zf.extractall(unpacked)
                     
                     style_result = style_cleaner.clean(unpacked, dry_run=False)
-                    
-                    # Repack
-                    with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for root, dirs, files in os.walk(unpacked):
-                            for file in files:
-                                file_path = Path(root) / file
-                                arcname = file_path.relative_to(unpacked)
-                                zf.write(file_path, arcname)
+                    repack_docx(unpacked, args.output)
             
             # Deep cleaning if requested
             if do_deep and result.success:
@@ -594,14 +580,7 @@ Deep Clean (--deep):
                         zf.extractall(unpacked)
                     
                     deep_result = run_deep_clean(unpacked, args, verbose=args.verbose)
-                    
-                    # Repack
-                    with zipfile.ZipFile(args.output, 'w', zipfile.ZIP_DEFLATED) as zf:
-                        for root, dirs, files in os.walk(unpacked):
-                            for file in files:
-                                file_path = Path(root) / file
-                                arcname = file_path.relative_to(unpacked)
-                                zf.write(file_path, arcname)
+                    repack_docx(unpacked, args.output)
     
     finally:
         # Cleanup temp directory

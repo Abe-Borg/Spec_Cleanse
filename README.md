@@ -107,6 +107,7 @@ Use these with `--deep` to selectively disable specific cleaning operations:
 | `--strip-links-domain DOMAIN` | Remove external hyperlinks and metadata for a given domain (repeatable) |
 | `--no-links` | Disable external link domain scrubbing |
 | `--aggressive-compat` | Remove entire `<w:compat>` block (higher risk, opt-in) |
+| `--only OPERATION` | Run only a single deep clean operation (for debugging). Choices: `media`, `styles`, `rsids`, `rsidreg`, `empty`, `fonts`, `compat`, `links`, `bookmarks`, `proof` |
 
 
 > ⚠ Aggressive Compatibility Removal  
@@ -138,7 +139,6 @@ python speccleanse.py spec.docx out.docx --deep --no-fonts
 
 # Quiet mode for scripting
 python speccleanse.py spec.docx out.docx --deep -q && echo "Success"
-```
 
 # Remove all SpecAgent hyperlinks and metadata
 python speccleanse.py spec.docx out.docx --deep --strip-links-domain specagent.com
@@ -147,6 +147,7 @@ python speccleanse.py spec.docx out.docx --deep --strip-links-domain specagent.c
 python speccleanse.py spec.docx out.docx --deep \
   --strip-links-domain specagent.com \
   --strip-links-domain example.com
+```
 
 
 
