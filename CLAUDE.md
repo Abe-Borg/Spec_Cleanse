@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-SpecCleanse is a Python CLI tool that removes unnecessary content from specification Word documents (.docx) while preserving all formatting and styles. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate editorial content, tracking metadata, and other cruft that should be removed before final publication.
+SpecCleanse is a Python tool (CLI + GUI) that removes unnecessary content from specification Word documents (.docx) while preserving all formatting and styles. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate editorial content, tracking metadata, and other cruft that should be removed before final publication.
 
 ## Architecture
 
@@ -15,6 +15,7 @@ SpecCleanse is a Python CLI tool that removes unnecessary content from specifica
 
 | Module | Lines | Purpose |
 |--------|-------|---------|
+| `gui.py` | ~410 | Tkinter GUI — runs maximum-strength clean (shallow + styles + deep, all options enabled) |
 | `speccleanse.py` | ~590 | CLI entry point, argument parsing, orchestration |
 | `detection.py` | ~405 | Pattern matching engine with confidence scoring; all detector classes |
 | `processor.py` | ~310 | DOCX unpacking/repacking (`repack_docx` utility), XML content walking, element removal |
@@ -156,6 +157,14 @@ Do not add new dependencies without strong justification.
 ```bash
 pip install lxml pyyaml
 ```
+
+### GUI Usage
+
+```bash
+python gui.py
+```
+
+The GUI runs maximum-strength cleaning (shallow + styles + deep with all options enabled, including aggressive compat removal) on one or more DOCX files. It uses tkinter (Python standard library — no extra dependencies). Processing runs in a background thread with a live log and progress bar.
 
 ### CLI Usage
 

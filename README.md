@@ -1,6 +1,6 @@
 # SpecCleanse
 
-A Python CLI tool that removes unnecessary content from specification Word documents (.docx), leaving only the actual specification content while preserving all formatting and styles.
+A Python tool that removes unnecessary content from specification Word documents (.docx), leaving only the actual specification content while preserving all formatting and styles. Available as both a CLI and a graphical interface.
 
 ## Features
 
@@ -34,6 +34,20 @@ ZIP/XML-level cleaning that removes accumulated cruft:
 | **External Links (Domains)** | External hyperlink relationships and cached link metadata for specified domains (e.g. specagent.com) | Variable (often KBs) |
 
 
+## GUI
+
+SpecCleanse includes a graphical interface that runs the maximum-strength clean on one or more files at once. It performs all three cleaning stages in sequence: shallow content removal, unused style cleanup, and aggressive deep clean with every option enabled.
+
+```bash
+python gui.py
+```
+
+1. Click **Add Files...** to select one or more `.docx` files
+2. Optionally choose an **Output Folder** (defaults to same folder as input, with `_cleaned` suffix)
+3. Click **CLEAN**
+
+The log area shows live progress per file, including item counts and before/after file sizes. Processing runs in a background thread so the UI stays responsive.
+
 ## Installation
 
 ### Requirements
@@ -51,7 +65,8 @@ pip install lxml pyyaml
 
 1. Clone or download this repository
 2. Install dependencies: `pip install -r requirements.txt`
-3. Run: `python speccleanse.py input.docx output.docx`
+3. Run the GUI: `python gui.py`
+4. Or use the CLI: `python speccleanse.py input.docx output.docx`
 
 ## Usage
 
@@ -285,6 +300,7 @@ Content in `document.xml` references external resources via `rId` attributes:
 
 ```
 Spec_Cleanse/
+├── gui.py             # Tkinter GUI (maximum-strength clean)
 ├── speccleanse.py     # CLI entry point and orchestration
 ├── detection.py       # Detection engine and detector classes
 ├── processor.py       # DOCX unpacking/repacking and content removal
