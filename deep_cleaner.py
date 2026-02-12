@@ -652,7 +652,6 @@ class OrphanAnalyzer:
         for media in self.report.orphaned_media:
             savings += media['size_bytes']
         
-        savings += len(self.report.orphaned_relationships) * 200
         savings += len(self.report.orphaned_styles) * 500
         savings += self.report.total_rsid_attributes * 25
         savings += self.report.total_empty_elements * 20
