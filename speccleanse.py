@@ -21,7 +21,8 @@ import yaml
 
 from detection import DetectionEngine, ContentType
 from processor import DocxProcessor, ProcessingResult, repack_docx
-from style_cleaner import StyleCleaner, StyleCleanResult 
+from style_cleaner import StyleCleaner, StyleCleanResult
+from verify import verify_clean, print_verification
 
 
 def load_config(config_path: Path) -> dict:
@@ -463,6 +464,12 @@ Deep Clean (--deep):
     )
     
     parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="After cleaning, verify that no unexpected content was removed"
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
         version="%(prog)s 2.0.0"
@@ -590,7 +597,17 @@ Deep Clean (--deep):
     # Output results
     if not args.quiet:
         print_result(result, verbose=args.verbose, style_result=style_result, deep_result=deep_result)
-    
+
+    # Verification pass
+    if args.verify and not args.dry_run and result.success:
+        if not args.quiet:
+            print("\nRunning verification...")
+        vresult = verify_clean(args.input, args.output, config_path=args.config)
+        if not args.quiet:
+            print_verification(vresult, verbose=args.verbose)
+        if not vresult.passed:
+            sys.exit(2)
+
     # Exit code
     sys.exit(0 if result.success else 1)
 
