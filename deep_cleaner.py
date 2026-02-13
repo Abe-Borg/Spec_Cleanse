@@ -14,7 +14,7 @@ import re
 from lxml import etree
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Optional
+from typing import Dict, List, Set
 
 
 # =============================================================================
@@ -48,37 +48,6 @@ class OrphanReport:
     
     estimated_savings_bytes: int = 0
     
-    def to_dict(self) -> dict:
-        """Convert to dictionary for internal use."""
-        return {
-            'orphans': {
-                'media': self.orphaned_media,
-                'styles': self.orphaned_styles,
-            },
-            'cruft': {
-                'rsid_attributes': self.rsid_attributes,
-                'empty_elements': self.empty_elements,
-                'non_english_font_mappings': self.non_english_font_mappings,
-                'compatibility_settings': self.compatibility_settings,
-                'internal_bookmarks': self.internal_bookmarks,
-                'proof_state_elements': self.proof_state_elements,
-            },
-            'statistics': {
-                'styles': {
-                    'defined': self.total_styles_defined,
-                    'used': self.total_styles_used,
-                    'orphaned': len(self.orphaned_styles)
-                },
-                'media': {
-                    'total_files': self.total_media_files,
-                    'referenced': self.total_media_referenced,
-                    'orphaned': len(self.orphaned_media)
-                },
-                'rsid_attributes': self.total_rsid_attributes,
-                'empty_elements': self.total_empty_elements,
-            },
-            'estimated_savings_bytes': self.estimated_savings_bytes
-        }
 
 
 @dataclass
@@ -94,15 +63,11 @@ class DeepCleanResult:
     rsids_removed: int = 0
     empty_elements_removed: int = 0
     font_mappings_removed: int = 0
-    compat_settings_removed: int = 0
     bookmarks_removed: int = 0
     proof_elements_removed: int = 0
     
     rsid_registry_removed: int = 0
     compat_elements_removed: int = 0
-    external_link_rels_removed: int = 0
-    hyperlink_elements_unwrapped: int = 0
-    app_hlinks_removed: int = 0
     bytes_saved: int = 0
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
@@ -669,73 +634,44 @@ class OrphanAnalyzer:
 
 class DeepCleaner:
     """Performs safe deep cleaning of DOCX files based on orphan analysis."""
-    
+
     NAMESPACES = {
         'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
         'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships',
-        'rel': 'http://schemas.openxmlformats.org/package/2006/relationships',
         'ct': 'http://schemas.openxmlformats.org/package/2006/content-types',
     }
     
-    def __init__(self, extract_dir: Path, orphan_report: OrphanReport, verbose: bool = False, aggressive_compat: bool = False, scrub_link_domains: Optional[List[str]] = None):
+    def __init__(self, extract_dir: Path, orphan_report: OrphanReport, verbose: bool = False):
         self.extract_dir = Path(extract_dir)
         self.orphan_report = orphan_report
         self.verbose = verbose
         self.result = DeepCleanResult()
-        
-        self.aggressive_compat = aggressive_compat
-        self.scrub_link_domains = [d.lower() for d in (scrub_link_domains or [])]
-    def clean(self,
-              remove_media: bool = True,
-              remove_styles: bool = True,
-              strip_rsids: bool = True,
-              remove_rsid_registry: bool = True,
-              remove_empty_elements: bool = True,
-              scrub_external_links: bool = True,
-              remove_non_english_fonts: bool = True,
-              remove_compat_settings: bool = True,
-              remove_internal_bookmarks: bool = True,
-              remove_proof_state: bool = True) -> DeepCleanResult:
-        """Perform deep cleaning based on orphan report."""
-        
+    def clean(self) -> DeepCleanResult:
+        """Perform deep cleaning based on orphan report.
+
+        Runs all cleaning operations (media, styles, RSIDs, empty elements,
+        fonts, compat, bookmarks, proof state).
+        """
         try:
-            if remove_media:
-                self._remove_orphaned_media()
-            
-            if remove_styles:
-                self._remove_orphaned_styles()
-            
-            if strip_rsids:
-                self._strip_rsids()
-            
-            if remove_rsid_registry:
-                self._remove_rsid_registry()
-            if remove_empty_elements:
-                self._remove_empty_elements()
-            
-            if remove_non_english_fonts:
-                self._remove_non_english_font_mappings()
-            
-            if remove_compat_settings:
-                self._remove_compatibility_settings()
-            
-            if scrub_external_links and self.scrub_link_domains:
-                self._scrub_external_links(self.scrub_link_domains)
-            if remove_internal_bookmarks:
-                self._remove_internal_bookmarks()
-            
-            if remove_proof_state:
-                self._remove_proof_state()
-            
+            self._remove_orphaned_media()
+            self._remove_orphaned_styles()
+            self._strip_rsids()
+            self._remove_rsid_registry()
+            self._remove_empty_elements()
+            self._remove_non_english_font_mappings()
+            self._remove_compatibility_settings()
+            self._remove_internal_bookmarks()
+            self._remove_proof_state()
+
             # Validate document structure
             if self._validate_structure():
                 self.result.success = True
             else:
                 self.result.errors.append("Document structure validation failed")
-        
+
         except Exception as e:
             self.result.errors.append(f"Cleaning failed: {str(e)}")
-        
+
         return self.result
     
     def _remove_orphaned_media(self):
@@ -838,130 +774,6 @@ class DeepCleaner:
         except Exception as e:
             self.result.warnings.append(f"Failed to remove rsid registry: {e}")
 
-    def _scrub_external_links(self, domains: List[str]):
-        """Remove external hyperlink relationships whose target matches any domain.
-
-        - Deletes matching Relationship entries from *.rels (TargetMode=External)
-        - Unwraps <w:hyperlink r:id="..."> elements that referenced removed rIds
-        - Removes cached hyperlink list from docProps/app.xml when it contains matching domains
-
-        This targets lingering vendor/tracking links (e.g., specagent.com) that may survive shallow clean.
-        """
-        domains = [d.lower() for d in domains if d]
-        if not domains:
-            return
-
-        # 1) Scrub hyperlink cache in docProps/app.xml (Extended Properties)
-        app_path = self.extract_dir / "docProps" / "app.xml"
-        if app_path.exists():
-            try:
-                parser = etree.XMLParser(remove_blank_text=False)
-                tree = etree.parse(str(app_path), parser)
-                root = tree.getroot()
-                removed_any = False
-
-                # HLinks element is in extended properties namespace, but we can match by localname
-                for hlinks in list(root.findall('.//*[local-name()="HLinks"]')):
-                    serialized = etree.tostring(hlinks, encoding='unicode')
-                    if any(d in serialized.lower() for d in domains):
-                        parent = hlinks.getparent()
-                        if parent is not None:
-                            parent.remove(hlinks)
-                            removed_any = True
-                if removed_any:
-                    tree.write(str(app_path), xml_declaration=True, encoding='UTF-8', standalone=True)
-                    self.result.app_hlinks_removed += 1
-                    self.result.bytes_saved += 10_000  # heuristic, often huge
-
-            except Exception as e:
-                self.result.warnings.append(f"Failed to scrub app.xml HLinks: {e}")
-
-        # Helper: map rels file -> owning part
-        def owning_part_for_rels(rels_rel_path: str) -> Optional[Path]:
-            # e.g. word/_rels/document.xml.rels -> word/document.xml
-            rels_rel_path = rels_rel_path.replace('\\', '/')
-            if '/_rels/' not in rels_rel_path:
-                return None
-            base = rels_rel_path.replace('/_rels/', '/')
-            if base.endswith('.rels'):
-                base = base[:-5]
-            return self.extract_dir / base
-
-        rel_ns = self.NAMESPACES['rel']
-        r_ns = self.NAMESPACES['r']
-        w_ns = self.NAMESPACES['w']
-
-        # 2) Scrub all *.rels files
-        for rels_file in self.extract_dir.rglob('*.rels'):
-            rels_rel_path = str(rels_file.relative_to(self.extract_dir)).replace('\\', '/')
-            try:
-                parser = etree.XMLParser(remove_blank_text=False)
-                tree = etree.parse(str(rels_file), parser)
-                root = tree.getroot()
-
-                removed_rids: List[str] = []
-                removed_count = 0
-
-                for rel in list(root.findall(f'{{{rel_ns}}}Relationship')):
-                    target_mode = (rel.get('TargetMode') or 'Internal')
-                    if target_mode != 'External':
-                        continue
-                    rel_type = rel.get('Type') or ''
-                    if 'relationships/hyperlink' not in rel_type:
-                        continue
-
-                    target = (rel.get('Target') or '')
-                    if any(d in target.lower() for d in domains):
-                        rid = rel.get('Id') or ''
-                        if rid:
-                            removed_rids.append(rid)
-                        root.remove(rel)
-                        removed_count += 1
-
-                if removed_count:
-                    tree.write(str(rels_file), xml_declaration=True, encoding='UTF-8', standalone=True)
-                    self.result.external_link_rels_removed += removed_count
-                    self.result.bytes_saved += removed_count * 200  # heuristic
-
-                    # 3) Unwrap <w:hyperlink r:id="..."> in owning part
-                    owning_part = owning_part_for_rels(rels_rel_path)
-                    if owning_part is not None and owning_part.exists():
-                        try:
-                            part_tree = etree.parse(str(owning_part), parser)
-                            part_root = part_tree.getroot()
-                            modified = False
-
-                            for hl in list(part_root.findall(f'.//{{{w_ns}}}hyperlink')):
-                                rid = hl.get(f'{{{r_ns}}}id')
-                                if rid and rid in removed_rids:
-                                    parent = hl.getparent()
-                                    if parent is None:
-                                        continue
-
-                                    insert_at = parent.index(hl)
-                                    # Move children out of hyperlink wrapper
-                                    for child in list(hl):
-                                        parent.insert(insert_at, child)
-                                        insert_at += 1
-                                    # Preserve tail
-                                    if hl.tail:
-                                        prev = parent[insert_at-1] if insert_at-1 < len(parent) else None
-                                        if prev is not None:
-                                            prev.tail = (prev.tail or '') + hl.tail
-                                        else:
-                                            parent.text = (parent.text or '') + hl.tail
-                                    parent.remove(hl)
-                                    self.result.hyperlink_elements_unwrapped += 1
-                                    modified = True
-
-                            if modified:
-                                part_tree.write(str(owning_part), xml_declaration=True, encoding='UTF-8', standalone=True)
-
-                        except Exception as e:
-                            self.result.warnings.append(f"Failed to unwrap hyperlinks in {owning_part.name}: {e}")
-
-            except Exception as e:
-                self.result.warnings.append(f"Failed to scrub rels {rels_rel_path}: {e}")
     def _remove_empty_elements(self):
         """Remove empty runs and other useless elements."""
         w_ns = self.NAMESPACES['w']
@@ -1058,68 +870,29 @@ class DeepCleaner:
         self.result.bytes_saved += total_removed * 60
     
     def _remove_compatibility_settings(self):
-        """Remove backwards compatibility settings from settings.xml.
-
-        Modes:
-        - default: remove a known-safe set of legacy compat tags (existing behavior)
-        - aggressive (self.aggressive_compat=True): remove entire <w:compat> blocks
-        """
+        """Remove entire <w:compat> blocks from settings.xml."""
         settings_path = self.extract_dir / "word" / "settings.xml"
         if not settings_path.exists():
             return
 
         w_ns = self.NAMESPACES['w']
 
-        removable_tags = {
-            'compatSetting', 'useFELayout', 'useWord2002TableStyleRules',
-            'growAutofit', 'useWord97LineBreakRules',
-            'doNotUseIndentAsNumberingTabStop', 'useAltKinsokuLineBreakRules',
-            'allowSpaceOfSameStyleInTable', 'doNotSuppressParagraphBorders',
-            'doNotAutofitConstrainedTables', 'autofitToFirstFixedWidthCell',
-            'displayHangulFixedWidth', 'splitPgBreakAndParaMark',
-            'doNotVertAlignCellWithSp', 'doNotBreakConstrainedForcedTable',
-            'doNotVertAlignInTxbx', 'useAnsiKerningPairs', 'cachedColBalance',
-        }
-
         try:
             parser = etree.XMLParser(remove_blank_text=False)
             tree = etree.parse(str(settings_path), parser)
             root = tree.getroot()
 
-            total_removed = 0
             compat_elements_removed = 0
 
-            # Aggressive: remove entire <w:compat> blocks
-            if self.aggressive_compat:
-                for compat in list(root.findall(f'.//{{{w_ns}}}compat')):
-                    parent = compat.getparent()
-                    if parent is not None:
-                        parent.remove(compat)
-                        compat_elements_removed += 1
-                if compat_elements_removed:
-                    tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
-                self.result.compat_elements_removed = compat_elements_removed
-                # estimate: assume ~200 bytes per compat block (varies); conservative
-                self.result.bytes_saved += compat_elements_removed * 200
-                return
-
-            # Default: remove selected legacy compat children
-            for compat in root.iter(f'{{{w_ns}}}compat'):
-                children_to_remove = []
-                for child in compat:
-                    tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if tag in removable_tags:
-                        children_to_remove.append(child)
-
-                for child in children_to_remove:
-                    compat.remove(child)
-                    total_removed += 1
-
-            if total_removed > 0:
+            for compat in list(root.findall(f'.//{{{w_ns}}}compat')):
+                parent = compat.getparent()
+                if parent is not None:
+                    parent.remove(compat)
+                    compat_elements_removed += 1
+            if compat_elements_removed:
                 tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
-
-            self.result.compat_settings_removed = total_removed
-            self.result.bytes_saved += total_removed * 50
+            self.result.compat_elements_removed = compat_elements_removed
+            self.result.bytes_saved += compat_elements_removed * 200
 
         except Exception as e:
             self.result.warnings.append(f"Failed to remove compat settings: {e}")
@@ -1270,83 +1043,29 @@ class DeepCleaner:
 # Public API
 # =============================================================================
 
-def analyze_and_clean(
-    unpacked_dir: Path,
-    remove_media: bool = True,
-    remove_styles: bool = True,
-    strip_rsids: bool = True,
-    remove_empty_elements: bool = True,
-    remove_non_english_fonts: bool = True,
-    remove_compat_settings: bool = True,
-    remove_internal_bookmarks: bool = True,
-    remove_proof_state: bool = True,
-    remove_rsid_registry: bool = True,
-    aggressive_compat: bool = False,
-    scrub_external_links: bool = True,
-    scrub_link_domains: Optional[List[str]] = None,
-    verbose: bool = False
-) -> DeepCleanResult:
-    """
-    Analyze and deep clean an unpacked DOCX directory.
-    
-    This is the main entry point for deep cleaning.
-    
+def analyze_and_clean(unpacked_dir: Path, verbose: bool = False) -> DeepCleanResult:
+    """Analyze and deep clean an unpacked DOCX directory.
+
+    Runs all cleaning operations: orphaned media/styles, RSID stripping,
+    empty elements, non-English fonts, compat settings, bookmarks, and
+    proof state.
+
     Args:
         unpacked_dir: Path to unpacked DOCX directory
-        remove_media: Remove orphaned media files
-        remove_styles: Remove orphaned style definitions
-        strip_rsids: Remove RSID tracking attributes
-        remove_empty_elements: Remove empty runs/elements
-        remove_non_english_fonts: Remove non-English font mappings from theme
-        remove_compat_settings: Remove backwards compatibility settings
-        remove_internal_bookmarks: Remove Word's internal bookmarks
-        remove_proof_state: Remove spell/grammar check state
         verbose: Print progress information
-    
+
     Returns:
         DeepCleanResult with details of operations performed
     """
     # Phase 1: Analyze for orphans
     analyzer = OrphanAnalyzer(unpacked_dir, verbose=verbose)
     orphan_report = analyzer.analyze()
-    
+
     if verbose:
         print(f"    Found {len(orphan_report.orphaned_styles)} orphaned styles")
         print(f"    Found {len(orphan_report.orphaned_media)} orphaned media files")
         print(f"    Found {orphan_report.total_rsid_attributes} RSID attributes")
-    
+
     # Phase 2: Deep clean
-    cleaner = DeepCleaner(unpacked_dir, orphan_report, verbose=verbose,
-                          aggressive_compat=aggressive_compat,
-                          scrub_link_domains=scrub_link_domains)
-    result = cleaner.clean(
-        remove_media=remove_media,
-        remove_styles=remove_styles,
-        strip_rsids=strip_rsids,
-        remove_rsid_registry=remove_rsid_registry,
-        remove_empty_elements=remove_empty_elements,
-        remove_non_english_fonts=remove_non_english_fonts,
-        remove_compat_settings=remove_compat_settings,
-        scrub_external_links=scrub_external_links,
-        remove_internal_bookmarks=remove_internal_bookmarks,
-        remove_proof_state=remove_proof_state,
-    )
-
-    return result
-
-
-def get_analysis_only(unpacked_dir: Path, verbose: bool = False) -> OrphanReport:
-    """
-    Analyze an unpacked DOCX directory without making changes.
-    
-    Useful for dry-run reporting.
-    
-    Args:
-        unpacked_dir: Path to unpacked DOCX directory
-        verbose: Print progress information
-    
-    Returns:
-        OrphanReport with analysis results
-    """
-    analyzer = OrphanAnalyzer(unpacked_dir, verbose=verbose)
-    return analyzer.analyze()
+    cleaner = DeepCleaner(unpacked_dir, orphan_report, verbose=verbose)
+    return cleaner.clean()
