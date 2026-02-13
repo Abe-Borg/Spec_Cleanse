@@ -56,7 +56,6 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
         result: ProcessingResult = processor.process(
             input_path=input_path,
             output_path=output_path,
-            dry_run=False,
         )
 
         if not result.success:
@@ -74,7 +73,7 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
         with zipfile.ZipFile(output_path, "r") as zf:
             zf.extractall(unpacked_styles)
 
-        style_result: StyleCleanResult = style_cleaner.clean(unpacked_styles, dry_run=False)
+        style_result: StyleCleanResult = style_cleaner.clean(unpacked_styles)
         repack_docx(unpacked_styles, output_path)
         log(f"    Removed {len(style_result.removed_styles)} unused styles")
 
@@ -84,22 +83,7 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
         with zipfile.ZipFile(output_path, "r") as zf:
             zf.extractall(unpacked_deep)
 
-        deep_result: DeepCleanResult = analyze_and_clean(
-            unpacked_deep,
-            remove_media=True,
-            remove_styles=True,
-            strip_rsids=True,
-            remove_empty_elements=True,
-            remove_non_english_fonts=True,
-            remove_compat_settings=True,
-            remove_internal_bookmarks=True,
-            remove_proof_state=True,
-            remove_rsid_registry=True,
-            aggressive_compat=True,
-            scrub_external_links=True,
-            scrub_link_domains=[],
-            verbose=False,
-        )
+        deep_result: DeepCleanResult = analyze_and_clean(unpacked_deep)
         repack_docx(unpacked_deep, output_path)
 
         log(f"    Media orphans removed:    {deep_result.media_removed}")
@@ -107,7 +91,7 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
         log(f"    RSIDs stripped:           {deep_result.rsids_removed}")
         log(f"    Empty elements removed:   {deep_result.empty_elements_removed}")
         log(f"    Non-English fonts removed:{deep_result.font_mappings_removed}")
-        log(f"    Compat settings removed:  {deep_result.compat_settings_removed}")
+        log(f"    Compat blocks removed:    {deep_result.compat_elements_removed}")
         log(f"    Bookmarks removed:        {deep_result.bookmarks_removed}")
         log(f"    Proof state removed:      {deep_result.proof_elements_removed}")
         log(f"    Bytes saved (deep):       {deep_result.bytes_saved:,}")

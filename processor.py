@@ -74,73 +74,71 @@ class DocxProcessor:
         self.verbose = verbose
         self._temp_dir: Optional[Path] = None
     
-    def process(self, input_path: Path, output_path: Path, dry_run: bool = False) -> ProcessingResult:
+    def process(self, input_path: Path, output_path: Path) -> ProcessingResult:
         """
         Process a DOCX file, removing detected content.
-        
+
         Args:
             input_path: Path to input DOCX
             output_path: Path for output DOCX
-            dry_run: If True, only detect without modifying
-            
+
         Returns:
             ProcessingResult with details of what was done
         """
         result = ProcessingResult(input_path=input_path, output_path=output_path)
-        
+
         try:
             # Validate input
             if not input_path.exists():
                 result.errors.append(f"Input file not found: {input_path}")
                 return result
-            
+
             if not self._is_valid_docx(input_path):
                 result.errors.append(f"Invalid DOCX file: {input_path}")
                 return result
-            
+
             # Create temp directory for unpacking
             self._temp_dir = Path(tempfile.mkdtemp(prefix="speccleanse_"))
-            
+
             try:
                 # Unpack
                 unpacked_dir = self._temp_dir / "unpacked"
                 self._unpack_docx(input_path, unpacked_dir)
-                
+
                 # Process main document
                 doc_path = unpacked_dir / "word" / "document.xml"
                 if doc_path.exists():
-                    doc_detections = self._process_xml_file(doc_path, dry_run)
+                    doc_detections = self._process_xml_file(doc_path)
                     result.detections.extend(doc_detections)
-                
+
                 # Process headers
                 for header_path in (unpacked_dir / "word").glob("header*.xml"):
-                    header_detections = self._process_xml_file(header_path, dry_run)
+                    header_detections = self._process_xml_file(header_path)
                     result.detections.extend(header_detections)
-                
+
                 # Process footers
                 for footer_path in (unpacked_dir / "word").glob("footer*.xml"):
-                    footer_detections = self._process_xml_file(footer_path, dry_run)
+                    footer_detections = self._process_xml_file(footer_path)
                     result.detections.extend(footer_detections)
-                
+
                 # Count results
                 for d in result.detections:
                     if d.content_type == ContentType.PRESERVE:
                         result.preserved_count += 1
                     else:
                         result.removed_count += 1
-                
-                # Repack if not dry run
-                if not dry_run:
-                    self._repack_docx(unpacked_dir, output_path)
-                    
+
+                # Repack
+                repack_docx(unpacked_dir, output_path)
+
             finally:
                 # Cleanup temp directory
                 if self._temp_dir and self._temp_dir.exists():
                     shutil.rmtree(self._temp_dir)
-                    
+
         except Exception as e:
             result.errors.append(f"Processing error: {str(e)}")
-            
+
         return result
     
     def _is_valid_docx(self, path: Path) -> bool:
@@ -157,49 +155,44 @@ class DocxProcessor:
         with zipfile.ZipFile(docx_path, 'r') as zf:
             zf.extractall(output_dir)
     
-    def _repack_docx(self, unpacked_dir: Path, output_path: Path):
-        """Repack directory into DOCX."""
-        repack_docx(unpacked_dir, output_path)
-    
-    def _process_xml_file(self, xml_path: Path, dry_run: bool) -> list[Detection]:
-        """Process an XML file, returning detections and optionally modifying."""
+    def _process_xml_file(self, xml_path: Path) -> list[Detection]:
+        """Process an XML file, returning detections and modifying in place."""
         detections = []
-        
+
         # Parse XML preserving whitespace
         parser = etree.XMLParser(remove_blank_text=False)
         tree = etree.parse(str(xml_path), parser)
         root = tree.getroot()
-        
+
         # Track elements to remove (can't modify during iteration)
         elements_to_remove = []
-        
+
         # Process paragraphs
         for para in root.iter(f"{W}p"):
             para_detections = self._process_paragraph(para)
             detections.extend(para_detections)
-            
+
             # Check if entire paragraph should be removed
             if self._should_remove_paragraph(para, para_detections):
                 elements_to_remove.append(("paragraph", para))
-        
+
         # Process runs not in paragraphs (rare but possible in headers/footers)
         for run in root.iter(f"{W}r"):
             if run.getparent().tag != f"{W}p":
                 run_text = self._get_run_text(run)
                 run_detections = self.engine.detect_in_element(run, run_text)
                 detections.extend(run_detections)
-                
+
                 if self.engine.should_remove(run_detections):
                     elements_to_remove.append(("run", run))
-        
-        # Remove elements if not dry run
-        if not dry_run:
-            for elem_type, elem in elements_to_remove:
-                self._remove_element(elem, elem_type)
-            
-            # Write back
-            tree.write(str(xml_path), xml_declaration=True, encoding="UTF-8", standalone=True)
-        
+
+        # Remove detected elements
+        for elem_type, elem in elements_to_remove:
+            self._remove_element(elem, elem_type)
+
+        # Write back
+        tree.write(str(xml_path), xml_declaration=True, encoding="UTF-8", standalone=True)
+
         return detections
     
     def _process_paragraph(self, para: etree._Element) -> list[Detection]:

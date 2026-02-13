@@ -75,70 +75,65 @@ class StyleCleaner:
     
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
-    
-    def analyze(self, unpacked_dir: Path) -> StyleCleanResult:
-        """
-        Analyze styles without modifying.
-        Returns which styles are used/unused.
-        """
+
+    def _analyze(self, unpacked_dir: Path) -> StyleCleanResult:
+        """Analyze styles to determine which are unused."""
         result = StyleCleanResult()
-        
+
         styles_path = unpacked_dir / "word" / "styles.xml"
         if not styles_path.exists():
             result.errors.append("No styles.xml found")
             return result
-        
+
         # Parse styles
         parser = etree.XMLParser(remove_blank_text=False)
         styles_tree = etree.parse(str(styles_path), parser)
         styles_root = styles_tree.getroot()
-        
+
         # Get all defined styles
         defined_styles = self._get_defined_styles(styles_root)
         result.total_styles = len(defined_styles)
-        
+
         if self.verbose:
             print(f"  Found {len(defined_styles)} defined styles")
-        
+
         # Find directly used styles in content
         directly_used = self._find_used_styles(unpacked_dir)
-        
+
         if self.verbose:
             print(f"  Found {len(directly_used)} directly used styles")
-        
+
         # Build dependency graph and find all required styles
         all_used = self._expand_dependencies(defined_styles, directly_used)
         result.used_styles = all_used
-        
+
         # Determine unused styles
         all_style_ids = set(defined_styles.keys())
         result.unused_styles = all_style_ids - all_used
-        
+
         # Filter out protected styles
         result.protected_styles = result.unused_styles & PROTECTED_STYLES
         result.unused_styles = result.unused_styles - PROTECTED_STYLES
-        
+
         # Also protect default styles
         for style_id, info in defined_styles.items():
             if info.is_default and style_id in result.unused_styles:
                 result.protected_styles.add(style_id)
                 result.unused_styles.discard(style_id)
-        
+
         if self.verbose:
             print(f"  {len(result.unused_styles)} styles can be removed")
             print(f"  {len(result.protected_styles)} unused but protected")
-        
+
         return result
-    
-    def clean(self, unpacked_dir: Path, dry_run: bool = False) -> StyleCleanResult:
-        """
-        Remove unused styles from styles.xml.
-        """
-        result = self.analyze(unpacked_dir)
-        
-        if result.errors or dry_run:
+
+    def clean(self, unpacked_dir: Path) -> StyleCleanResult:
+        """Analyze and remove unused styles from styles.xml."""
+        result = self._analyze(unpacked_dir)
+
+        if result.errors:
             return result
-        
+
         if not result.unused_styles:
             return result
         

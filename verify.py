@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 SpecCleanse Verification Module
 
@@ -10,15 +9,11 @@ Classification is two-pronged:
   1. Text-pattern matching against patterns.yaml
   2. Formatting-based detection (italic + editorial color, specifier
      paragraph/character style, hidden text) from the source DOCX
-
-Standalone usage:
-    python verify.py input.docx output.docx [-v]
 """
 
 import difflib
 import re
 import shutil
-import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -404,105 +399,3 @@ def verify_clean(
         removed=removed,
     )
 
-
-# =============================================================================
-# Reporting
-# =============================================================================
-
-def print_verification(result: VerificationResult, verbose: bool = False):
-    """Print a human-readable verification report."""
-    print()
-    print("=" * 60)
-    print("SpecCleanse Verification Report")
-    print("=" * 60)
-    print()
-    print(f"Input:  {result.input_path} ({result.input_paragraph_count} paragraphs)")
-    print(f"Output: {result.output_path} ({result.output_paragraph_count} paragraphs)")
-    print(f"Paragraphs removed: {len(result.removed)}")
-    print()
-
-    expected = result.expected_removals
-    unexpected = result.unexpected_removals
-    preserve_violations = result.preserve_violations
-
-    # Category breakdown for expected removals
-    if expected:
-        category_counts: dict[str, int] = {}
-        for r in expected:
-            category_counts[r.category] = category_counts.get(r.category, 0) + 1
-
-        print(f"Expected removals ({len(expected)}):")
-        for cat, count in sorted(category_counts.items()):
-            print(f"  {cat}: {count}")
-        print()
-
-    if verbose and expected:
-        print("-" * 60)
-        print("EXPECTED REMOVALS (matched known patterns):")
-        print("-" * 60)
-        for i, r in enumerate(expected, 1):
-            preview = r.text[:100] + "..." if len(r.text) > 100 else r.text
-            preview = preview.replace("\n", " ")
-            print(f"  {i}. [{r.category}] \"{preview}\"")
-        print()
-
-    # Preserve violations — most severe, show first
-    if preserve_violations:
-        print("-" * 60)
-        print(f"PRESERVE VIOLATIONS ({len(preserve_violations)}) "
-              "— content that should NEVER be removed:")
-        print("-" * 60)
-        for i, r in enumerate(preserve_violations, 1):
-            preview = r.text[:120] + "..." if len(r.text) > 120 else r.text
-            preview = preview.replace("\n", " ")
-            print(f"  {i}. \"{preview}\"")
-            print(f"     Matched preserve pattern: {r.pattern_matched}")
-        print()
-
-    if unexpected:
-        print("-" * 60)
-        print(f"UNEXPECTED REMOVALS ({len(unexpected)}) — review these:")
-        print("-" * 60)
-        for i, r in enumerate(unexpected, 1):
-            preview = r.text[:120] + "..." if len(r.text) > 120 else r.text
-            preview = preview.replace("\n", " ")
-            print(f"  {i}. \"{preview}\"")
-        print()
-
-    if result.passed:
-        print("PASS — all removals match known bloat patterns")
-    elif preserve_violations:
-        print(f"FAIL — {len(preserve_violations)} preserve violation(s): "
-              "content matching preserve patterns was removed")
-        if unexpected:
-            print(f"     + {len(unexpected)} unexpected removal(s)")
-        print("  This indicates a bug in the processor. Preserved content "
-              "should never be deleted.")
-    else:
-        print(f"WARN — {len(unexpected)} removal(s) did not match any known pattern")
-        print("  These may be legitimate spec content. Please review above.")
-
-
-# =============================================================================
-# Standalone CLI
-# =============================================================================
-
-if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Usage: python verify.py <input.docx> <output.docx> [-v]")
-        sys.exit(1)
-
-    inp = Path(sys.argv[1])
-    out = Path(sys.argv[2])
-    verbose = "-v" in sys.argv
-
-    if not inp.exists():
-        print(f"Error: {inp} not found", file=sys.stderr)
-        sys.exit(1)
-    if not out.exists():
-        print(f"Error: {out} not found", file=sys.stderr)
-        sys.exit(1)
-
-    result = verify_clean(inp, out)
-    print_verification(result, verbose=verbose)
-    sys.exit(0 if result.passed else 1)
