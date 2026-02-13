@@ -128,12 +128,23 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
         vresult = verify_clean(input_path, output_path)
         n_expected = len(vresult.expected_removals)
         n_unexpected = len(vresult.unexpected_removals)
+        n_preserve = len(vresult.preserve_violations)
         log(f"    Paragraphs removed: {len(vresult.removed)}"
-            f" ({n_expected} expected, {n_unexpected} unexpected)")
+            f" ({n_expected} expected, {n_unexpected} unexpected"
+            f", {n_preserve} preserve violations)")
         if vresult.passed:
             log("    PASS — all removals match known bloat patterns")
         else:
-            log(f"    WARN — {n_unexpected} removal(s) may be real content:")
+            if n_preserve:
+                log(f"    FAIL — {n_preserve} preserve violation(s) "
+                    "(content that should NEVER be removed):")
+                for r in vresult.preserve_violations:
+                    preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
+                    preview = preview.replace("\n", " ")
+                    log(f"      \"{preview}\"")
+                    log(f"        matched: {r.pattern_matched}")
+            if n_unexpected:
+                log(f"    WARN — {n_unexpected} removal(s) may be real content:")
             for r in vresult.unexpected_removals:
                 preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
                 preview = preview.replace("\n", " ")

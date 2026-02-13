@@ -63,6 +63,9 @@ class RemovedParagraph:
     pattern_matched: str | None = None # the regex or signal that matched
 
 
+PRESERVE_VIOLATION = "preserve_violation"
+
+
 @dataclass
 class VerificationResult:
     """Structured result of input-vs-output comparison."""
@@ -75,7 +78,10 @@ class VerificationResult:
     @property
     def expected_removals(self) -> list[RemovedParagraph]:
         """Removals that matched a known bloat pattern or formatting signal."""
-        return [r for r in self.removed if r.category is not None]
+        return [
+            r for r in self.removed
+            if r.category is not None and r.category != PRESERVE_VIOLATION
+        ]
 
     @property
     def unexpected_removals(self) -> list[RemovedParagraph]:
@@ -83,8 +89,16 @@ class VerificationResult:
         return [r for r in self.removed if r.category is None]
 
     @property
+    def preserve_violations(self) -> list[RemovedParagraph]:
+        """Removals that matched a preserve pattern — these should never be removed."""
+        return [r for r in self.removed if r.category == PRESERVE_VIOLATION]
+
+    @property
     def passed(self) -> bool:
-        return len(self.unexpected_removals) == 0
+        return (
+            len(self.unexpected_removals) == 0
+            and len(self.preserve_violations) == 0
+        )
 
 
 # =============================================================================
@@ -264,6 +278,25 @@ def _build_removal_patterns(config: dict) -> list[tuple[str, re.Pattern]]:
     return patterns
 
 
+def _build_preserve_patterns(config: dict) -> list[re.Pattern]:
+    """Compile preserve patterns from the config.
+
+    These patterns identify content that should NEVER be removed.
+    If removed content matches one of these, it's a verification error.
+    """
+    preserve_section = config.get("preserve_patterns", {})
+    if not preserve_section.get("enabled", True):
+        return []
+
+    patterns: list[re.Pattern] = []
+    for pat_str in preserve_section.get("text_patterns", []):
+        try:
+            patterns.append(re.compile(pat_str, re.IGNORECASE | re.DOTALL))
+        except re.error:
+            continue
+    return patterns
+
+
 def _classify_removal(
     text: str, patterns: list[tuple[str, re.Pattern]]
 ) -> tuple[str | None, str | None]:
@@ -313,7 +346,8 @@ def verify_clean(
     # Plain text extraction for output
     output_texts = extract_text(output_path)
 
-    patterns = _build_removal_patterns(config)
+    removal_patterns = _build_removal_patterns(config)
+    preserve_patterns = _build_preserve_patterns(config)
 
     # Sequence diff — find paragraphs that disappeared
     matcher = difflib.SequenceMatcher(None, input_texts, output_texts)
@@ -324,9 +358,24 @@ def verify_clean(
             for idx in range(i1, i2):
                 para_info = input_paras[idx]
 
+                # Layer 0: check if this content should have been preserved
+                preserve_match = None
+                for ppat in preserve_patterns:
+                    if ppat.search(para_info.text):
+                        preserve_match = ppat.pattern
+                        break
+
+                if preserve_match is not None:
+                    removed.append(RemovedParagraph(
+                        text=para_info.text,
+                        category=PRESERVE_VIOLATION,
+                        pattern_matched=preserve_match,
+                    ))
+                    continue
+
                 # Layer 1: text-pattern match
                 category, pattern_str = _classify_removal(
-                    para_info.text, patterns
+                    para_info.text, removal_patterns
                 )
 
                 # Layer 2: formatting-based fallback
@@ -374,6 +423,7 @@ def print_verification(result: VerificationResult, verbose: bool = False):
 
     expected = result.expected_removals
     unexpected = result.unexpected_removals
+    preserve_violations = result.preserve_violations
 
     # Category breakdown for expected removals
     if expected:
@@ -396,6 +446,19 @@ def print_verification(result: VerificationResult, verbose: bool = False):
             print(f"  {i}. [{r.category}] \"{preview}\"")
         print()
 
+    # Preserve violations — most severe, show first
+    if preserve_violations:
+        print("-" * 60)
+        print(f"PRESERVE VIOLATIONS ({len(preserve_violations)}) "
+              "— content that should NEVER be removed:")
+        print("-" * 60)
+        for i, r in enumerate(preserve_violations, 1):
+            preview = r.text[:120] + "..." if len(r.text) > 120 else r.text
+            preview = preview.replace("\n", " ")
+            print(f"  {i}. \"{preview}\"")
+            print(f"     Matched preserve pattern: {r.pattern_matched}")
+        print()
+
     if unexpected:
         print("-" * 60)
         print(f"UNEXPECTED REMOVALS ({len(unexpected)}) — review these:")
@@ -408,6 +471,13 @@ def print_verification(result: VerificationResult, verbose: bool = False):
 
     if result.passed:
         print("PASS — all removals match known bloat patterns")
+    elif preserve_violations:
+        print(f"FAIL — {len(preserve_violations)} preserve violation(s): "
+              "content matching preserve patterns was removed")
+        if unexpected:
+            print(f"     + {len(unexpected)} unexpected removal(s)")
+        print("  This indicates a bug in the processor. Preserved content "
+              "should never be deleted.")
     else:
         print(f"WARN — {len(unexpected)} removal(s) did not match any known pattern")
         print("  These may be legitimate spec content. Please review above.")
