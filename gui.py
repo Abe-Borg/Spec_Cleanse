@@ -22,6 +22,7 @@ from detection import DetectionEngine, ContentType
 from deep_cleaner import analyze_and_clean, DeepCleanResult
 from processor import DocxProcessor, ProcessingResult, repack_docx
 from style_cleaner import StyleCleaner, StyleCleanResult
+from verify import verify_clean
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +122,22 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
         saved = original_size - final_size
         pct = (saved / original_size * 100) if original_size else 0
         log(f"  Done: {original_size:,} -> {final_size:,} bytes ({pct:.1f}% smaller)")
+
+        # --- 4. Verification ---
+        log("  Verifying no spec content was lost...")
+        vresult = verify_clean(input_path, output_path)
+        n_expected = len(vresult.expected_removals)
+        n_unexpected = len(vresult.unexpected_removals)
+        log(f"    Paragraphs removed: {len(vresult.removed)}"
+            f" ({n_expected} expected, {n_unexpected} unexpected)")
+        if vresult.passed:
+            log("    PASS — all removals match known bloat patterns")
+        else:
+            log(f"    WARN — {n_unexpected} removal(s) may be real content:")
+            for r in vresult.unexpected_removals:
+                preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
+                preview = preview.replace("\n", " ")
+                log(f"      \"{preview}\"")
 
         return True
 
