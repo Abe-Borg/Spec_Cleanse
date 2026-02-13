@@ -34,7 +34,7 @@ specifier_notes:
 copyright_notices:
   enabled: true
   description: "Boilerplate copyright text"
-  
+
   text_patterns:
     - '©'
     - 'copyright\s+\d{4}'
@@ -45,6 +45,7 @@ copyright_notices:
     - 'licensed\s+for\s+use\s+by'
     - 'duplication.*?prohibited'
     - 'unauthorized.*?reproduction'
+    - 'exclusively\s+published\s+and\s+distributed'   # ARCOM distribution notice
 
 hidden_text:
   enabled: true
@@ -105,7 +106,16 @@ editorial_artifacts:
     - '\[pending\]'
     - 'fill\s+in\s+(the\s+)?blank'
     - 'complete\s+this\s+section'
-    - 'verify\s+(with|before)\s+'
+    - 'verify\s+(with|before|that\s+section)\s+'
+
+    # MasterSpec / ARCOM editorial instructions
+    - 'retain\s+.*?(paragraph|subparagraph)\s*(below|above)?'
+    - 'copy\s+.*?(paragraph|subparagraph)\s*(below|above)?'
+    - 'see\s+(evaluations|editing\s+instruction)'
+    - 'use\s+this\s+section\s+if'
+    - 'revise\s+this\s+section'
+    - 'this\s+section\s+uses\s+the\s+term'
+    - 'coordinate\s+specifications\s+for'
     
     # Section markers that aren't content
     - '---+\s*optional\s*---+'

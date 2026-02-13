@@ -6,6 +6,11 @@ Compares input and output DOCX files to verify that only expected
 content (bloat, editorial notes, etc.) was removed and no real
 specification content was lost.
 
+Classification is two-pronged:
+  1. Text-pattern matching against patterns.yaml
+  2. Formatting-based detection (italic + editorial color, specifier
+     paragraph/character style, hidden text) from the source DOCX
+
 Standalone usage:
     python verify.py input.docx output.docx [-v]
 """
@@ -32,11 +37,30 @@ W = f"{{{W_NS}}}"
 # =============================================================================
 
 @dataclass
+class ParagraphInfo:
+    """Paragraph text with formatting metadata from the source DOCX."""
+    text: str
+    has_editorial_style: bool = False
+    is_italic: bool = False
+    has_editorial_color: bool = False
+    is_hidden: bool = False
+
+    @property
+    def has_editorial_formatting(self) -> bool:
+        """True if formatting signals suggest editorial/specifier content."""
+        return (
+            self.has_editorial_style
+            or self.is_hidden
+            or (self.is_italic and self.has_editorial_color)
+        )
+
+
+@dataclass
 class RemovedParagraph:
     """A paragraph present in input but absent in output."""
     text: str
     category: str | None = None       # e.g. "specifier_note", or None if unexpected
-    pattern_matched: str | None = None # the regex that matched
+    pattern_matched: str | None = None # the regex or signal that matched
 
 
 @dataclass
@@ -50,7 +74,7 @@ class VerificationResult:
 
     @property
     def expected_removals(self) -> list[RemovedParagraph]:
-        """Removals that matched a known bloat pattern."""
+        """Removals that matched a known bloat pattern or formatting signal."""
         return [r for r in self.removed if r.category is not None]
 
     @property
@@ -67,6 +91,17 @@ class VerificationResult:
 # Text extraction
 # =============================================================================
 
+def _collect_xml_files(word_dir: Path) -> list[Path]:
+    """Return document.xml, headers, footers in a stable order."""
+    xml_files: list[Path] = []
+    doc_xml = word_dir / "document.xml"
+    if doc_xml.exists():
+        xml_files.append(doc_xml)
+    xml_files.extend(sorted(word_dir.glob("header*.xml")))
+    xml_files.extend(sorted(word_dir.glob("footer*.xml")))
+    return xml_files
+
+
 def extract_text(docx_path: Path) -> list[str]:
     """Extract paragraph-level text from a DOCX file.
 
@@ -79,17 +114,7 @@ def extract_text(docx_path: Path) -> list[str]:
             zf.extractall(temp_dir)
 
         paragraphs: list[str] = []
-        word_dir = temp_dir / "word"
-
-        # Collect XML parts in a stable order
-        xml_files: list[Path] = []
-        doc_xml = word_dir / "document.xml"
-        if doc_xml.exists():
-            xml_files.append(doc_xml)
-        xml_files.extend(sorted(word_dir.glob("header*.xml")))
-        xml_files.extend(sorted(word_dir.glob("footer*.xml")))
-
-        for xml_path in xml_files:
+        for xml_path in _collect_xml_files(temp_dir / "word"):
             parser = etree.XMLParser(remove_blank_text=False)
             tree = etree.parse(str(xml_path), parser)
             root = tree.getroot()
@@ -102,6 +127,103 @@ def extract_text(docx_path: Path) -> list[str]:
                 text = "".join(texts).strip()
                 if text:
                     paragraphs.append(text)
+
+        return paragraphs
+
+    finally:
+        if temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+
+def _extract_paragraphs_with_formatting(
+    docx_path: Path, config: dict
+) -> list[ParagraphInfo]:
+    """Extract paragraphs from a DOCX with formatting metadata.
+
+    Uses the style and colour lists from the config to determine
+    whether each paragraph carries editorial formatting signals.
+    """
+    # Gather editorial style names and colours from config
+    style_section = config.get("style_based_detection", {})
+    editorial_styles: set[str] = set(
+        style_section.get("paragraph_styles", [])
+        + style_section.get("character_styles", [])
+    )
+
+    spec_section = config.get("specifier_notes", {})
+    fmt_signals = spec_section.get("formatting_signals", {})
+    editorial_colors: set[str] = {c.upper() for c in fmt_signals.get("colors", [])}
+
+    temp_dir = Path(tempfile.mkdtemp(prefix="speccleanse_verify_"))
+    try:
+        with zipfile.ZipFile(docx_path, "r") as zf:
+            zf.extractall(temp_dir)
+
+        paragraphs: list[ParagraphInfo] = []
+
+        for xml_path in _collect_xml_files(temp_dir / "word"):
+            parser = etree.XMLParser(remove_blank_text=False)
+            tree = etree.parse(str(xml_path), parser)
+            root = tree.getroot()
+
+            for para in root.iter(f"{W}p"):
+                texts: list[str] = []
+                has_editorial_style = False
+                has_editorial_color = False
+                is_hidden = False
+                runs_with_text = 0
+                italic_runs = 0
+
+                # Check paragraph style
+                ppr = para.find(f"{W}pPr")
+                if ppr is not None:
+                    pstyle = ppr.find(f"{W}pStyle")
+                    if pstyle is not None:
+                        val = pstyle.get(f"{W}val")
+                        if val in editorial_styles:
+                            has_editorial_style = True
+
+                # Walk runs
+                for run in para.iter(f"{W}r"):
+                    run_texts: list[str] = []
+                    for t in run.iter(f"{W}t"):
+                        if t.text:
+                            run_texts.append(t.text)
+                    run_text = "".join(run_texts)
+                    texts.append(run_text)
+
+                    if not run_text.strip():
+                        continue
+                    runs_with_text += 1
+
+                    rpr = run.find(f"{W}rPr")
+                    if rpr is not None:
+                        if rpr.find(f"{W}i") is not None:
+                            italic_runs += 1
+                        color_elem = rpr.find(f"{W}color")
+                        if color_elem is not None:
+                            color_val = (color_elem.get(f"{W}val") or "").upper()
+                            if color_val in editorial_colors:
+                                has_editorial_color = True
+                        if rpr.find(f"{W}vanish") is not None:
+                            is_hidden = True
+                        rstyle = rpr.find(f"{W}rStyle")
+                        if rstyle is not None:
+                            val = rstyle.get(f"{W}val")
+                            if val in editorial_styles:
+                                has_editorial_style = True
+
+                is_italic = runs_with_text > 0 and italic_runs == runs_with_text
+
+                text = "".join(texts).strip()
+                if text:
+                    paragraphs.append(ParagraphInfo(
+                        text=text,
+                        has_editorial_style=has_editorial_style,
+                        is_italic=is_italic,
+                        has_editorial_color=has_editorial_color,
+                        is_hidden=is_hidden,
+                    ))
 
         return paragraphs
 
@@ -166,6 +288,11 @@ def verify_clean(
 ) -> VerificationResult:
     """Compare input and output DOCX files, classify every removal.
 
+    Classification uses two layers:
+      1. Text-pattern matching from patterns.yaml
+      2. Formatting-based detection (italic + editorial colour,
+         specifier paragraph/character style, hidden text)
+
     Args:
         input_path:  Original DOCX before cleaning.
         output_path: Cleaned DOCX after processing.
@@ -179,34 +306,52 @@ def verify_clean(
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    input_paragraphs = extract_text(input_path)
-    output_paragraphs = extract_text(output_path)
+    # Rich extraction for input (text + formatting metadata)
+    input_paras = _extract_paragraphs_with_formatting(input_path, config)
+    input_texts = [p.text for p in input_paras]
+
+    # Plain text extraction for output
+    output_texts = extract_text(output_path)
 
     patterns = _build_removal_patterns(config)
 
     # Sequence diff — find paragraphs that disappeared
-    matcher = difflib.SequenceMatcher(None, input_paragraphs, output_paragraphs)
+    matcher = difflib.SequenceMatcher(None, input_texts, output_texts)
 
-    removed_texts: list[str] = []
+    removed: list[RemovedParagraph] = []
     for tag, i1, i2, _j1, _j2 in matcher.get_opcodes():
         if tag in ("delete", "replace"):
-            removed_texts.extend(input_paragraphs[i1:i2])
+            for idx in range(i1, i2):
+                para_info = input_paras[idx]
 
-    # Classify each removal
-    removed: list[RemovedParagraph] = []
-    for text in removed_texts:
-        category, pattern_str = _classify_removal(text, patterns)
-        removed.append(RemovedParagraph(
-            text=text,
-            category=category,
-            pattern_matched=pattern_str,
-        ))
+                # Layer 1: text-pattern match
+                category, pattern_str = _classify_removal(
+                    para_info.text, patterns
+                )
+
+                # Layer 2: formatting-based fallback
+                if category is None and para_info.has_editorial_formatting:
+                    category = "formatting_based"
+                    signals: list[str] = []
+                    if para_info.has_editorial_style:
+                        signals.append("editorial style")
+                    if para_info.is_hidden:
+                        signals.append("hidden text")
+                    if para_info.is_italic and para_info.has_editorial_color:
+                        signals.append("italic + editorial color")
+                    pattern_str = "; ".join(signals)
+
+                removed.append(RemovedParagraph(
+                    text=para_info.text,
+                    category=category,
+                    pattern_matched=pattern_str,
+                ))
 
     return VerificationResult(
         input_path=input_path,
         output_path=output_path,
-        input_paragraph_count=len(input_paragraphs),
-        output_paragraph_count=len(output_paragraphs),
+        input_paragraph_count=len(input_texts),
+        output_paragraph_count=len(output_texts),
         removed=removed,
     )
 
