@@ -598,8 +598,9 @@ Deep Clean (--deep):
     if not args.quiet:
         print_result(result, verbose=args.verbose, style_result=style_result, deep_result=deep_result)
 
-    # Verification pass
-    if args.verify and not args.dry_run and result.success:
+    # Verification pass — run whenever output file exists (even if processor
+    # reported non-fatal errors) so we can catch wrongly-removed content.
+    if args.verify and not args.dry_run and args.output.exists():
         if not args.quiet:
             print("\nRunning verification...")
         vresult = verify_clean(args.input, args.output, config_path=args.config)
