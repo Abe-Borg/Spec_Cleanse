@@ -2,26 +2,29 @@
 
 ## Project Overview
 
-SpecCleanse is a Python tool (CLI + GUI) that removes unnecessary content from specification Word documents (.docx) while preserving all formatting and styles. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate editorial content, tracking metadata, and other cruft that should be removed before final publication.
+SpecCleanse is a Python GUI tool that removes unnecessary content from specification Word documents (.docx) while preserving all formatting and styles. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate editorial content, tracking metadata, and other cruft that should be removed before final publication.
+
+The application runs through a Tkinter GUI and always performs a maximum-strength clean: shallow content removal + unused style cleanup + aggressive deep clean with all operations enabled.
 
 ## Architecture
 
-### Two-Tier Cleaning Model
+### Three-Stage Cleaning Pipeline
 
-1. **Shallow Clean (default)** — Content-level removal of editorial/specifier content using confidence-scored pattern detection
-2. **Deep Clean (`--deep`)** — ZIP/XML-level optimization that removes orphaned resources, RSID tracking, empty elements, and other accumulated cruft
+Every clean runs all three stages in sequence:
+1. **Shallow Clean** — Content-level removal of editorial/specifier content using confidence-scored pattern detection
+2. **Style Clean** — Unused style removal via dependency graph analysis
+3. **Deep Clean** — ZIP/XML-level optimization that removes orphaned resources, RSID tracking, empty elements, compat blocks, and other accumulated cruft
 
 ### Module Responsibilities
 
-| Module | Lines | Purpose |
-|--------|-------|---------|
-| `gui.py` | ~410 | Tkinter GUI — runs maximum-strength clean (shallow + styles + deep, all options enabled) |
-| `speccleanse.py` | ~590 | CLI entry point, argument parsing, orchestration |
-| `detection.py` | ~405 | Pattern matching engine with confidence scoring; all detector classes |
-| `processor.py` | ~310 | DOCX unpacking/repacking (`repack_docx` utility), XML content walking, element removal |
-| `deep_cleaner.py` | ~1360 | Orphan analysis, RSID stripping, cruft removal at ZIP/XML level |
-| `style_cleaner.py` | ~315 | Unused style detection via dependency graph analysis |
-| `diagnose.py` | ~305 | Standalone diagnostic utility for inspecting document formatting |
+| Module | Purpose |
+|--------|---------|
+| `gui.py` | Tkinter GUI — entry point, orchestrates all three cleaning stages, verification, progress/logging |
+| `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
+| `processor.py` | DOCX unpacking/repacking (`repack_docx` utility), XML content walking, element removal |
+| `deep_cleaner.py` | Orphan analysis, RSID stripping, cruft removal at ZIP/XML level |
+| `style_cleaner.py` | Unused style detection via dependency graph analysis |
+| `verify.py` | Post-processing verification comparing input vs output |
 
 ### Configuration
 
@@ -34,14 +37,11 @@ SpecCleanse is a Python tool (CLI + GUI) that removes unnecessary content from s
 
 ```
 input.docx
-  → unpack ZIP to temp dir
-  → parse XML (document.xml, headers, footers)
-  → run detectors (confidence scoring per element)
-  → apply preserve-pattern overrides
-  → remove elements where confidence ≥ 0.5
-  → [if --deep] orphan analysis → cruft scan → remove → validate
-  → repack ZIP to output.docx
-  → cleanup temp dir
+  → Shallow: unpack ZIP → parse XML → detect → remove → repack
+  → Styles: unpack output → analyze dependency graph → remove unused → repack
+  → Deep: unpack output → orphan analysis → cruft scan → remove all → validate → repack
+  → Verify: compare input vs output, classify removals
+  → output_cleaned.docx
 ```
 
 ## Key Design Patterns
@@ -72,7 +72,7 @@ Detections are scored 0.0–1.0. Multiple signals boost confidence:
 - Pattern + italic formatting: +0.2
 - Pattern + color match (red/blue): +0.3
 - Style name match: ~0.8+
-- Removal threshold: confidence ≥ 0.5
+- Removal threshold: confidence >= 0.5
 - Preserve patterns always override removals regardless of confidence
 
 ### Dataclass-Based Results
@@ -81,6 +81,7 @@ Processing results are communicated via dataclasses, not exceptions:
 - `Detection` — individual content detection with confidence
 - `ProcessingResult` — aggregated results with errors list
 - `OrphanReport` — structured deep-clean findings
+- `DeepCleanResult` — deep cleaning outcomes
 - `StyleCleanResult` — style cleaning outcomes
 
 Errors accumulate in result objects; processing doesn't halt on non-fatal issues.
@@ -141,13 +142,13 @@ Do not add new dependencies without strong justification.
 - Results objects accumulate errors without stopping execution
 - Graceful degradation: warnings don't fail the entire operation
 - Validation of document structure post-cleaning (deep clean)
-- `sys.exit(1)` only at CLI level for fatal errors (missing files, invalid input)
+- GUI continues processing remaining files even if one fails
 
 ### File Organization
 
 - All source files are flat in the project root (no `src/` directory)
 - No packaging infrastructure (no `setup.py`, `pyproject.toml`)
-- Designed for direct script execution: `python speccleanse.py ...`
+- Entry point: `python gui.py`
 - Imports are relative within the project (e.g., `from detection import DetectionEngine`)
 
 ## How to Run
@@ -158,7 +159,7 @@ Do not add new dependencies without strong justification.
 pip install lxml pyyaml
 ```
 
-### GUI Usage
+### Usage
 
 ```bash
 python gui.py
@@ -166,38 +167,9 @@ python gui.py
 
 The GUI runs maximum-strength cleaning (shallow + styles + deep with all options enabled, including aggressive compat removal) on one or more DOCX files. It uses tkinter (Python standard library — no extra dependencies). Processing runs in a background thread with a live log and progress bar.
 
-### CLI Usage
-
-```bash
-# Shallow clean (default)
-python speccleanse.py input.docx output.docx
-
-# Full clean (shallow + deep)
-python speccleanse.py input.docx output.docx --deep
-
-# Preview without modifying
-python speccleanse.py input.docx output.docx --deep --dry-run -v
-
-# Deep clean only (skip content removal)
-python speccleanse.py input.docx output.docx --deep-only
-
-# Diagnose document formatting
-python diagnose.py input.docx -e
-```
-
-### Key CLI Flags
-
-| Flag | Purpose |
-|------|---------|
-| `--deep` | Enable deep cleaning (orphans + cruft) |
-| `--deep-only` | Only deep clean, skip shallow |
-| `--styles-only` | Only clean unused styles |
-| `--dry-run` / `-d` | Preview without modifying |
-| `--verbose` / `-v` | Detailed detection output |
-| `--quiet` / `-q` | Suppress output except errors |
-| `--no-media`, `--no-rsids`, etc. | Selectively disable deep-clean operations |
-| `--strip-links-domain DOMAIN` | Remove hyperlinks for specific domains |
-| `--only OPERATION` | Run only a single deep-clean operation (for debugging) |
+1. Click **Add Files...** to select one or more `.docx` files
+2. Optionally choose an **Output Folder** (defaults to same folder as input, with `_cleaned` suffix)
+3. Click **CLEAN**
 
 ## Testing
 
@@ -213,27 +185,24 @@ Test output goes to `spec_testing/` (gitignored).
 
 ### Manual Testing Workflow
 
-```bash
-# Preview what would be removed
-python speccleanse.py "test_file.docx" output.docx --deep --dry-run -v
-
-# Run actual clean and inspect output in Word
-python speccleanse.py "test_file.docx" output.docx --deep -v
-```
+Run the GUI against sample files. The log output shows:
+- Per-stage item counts (shallow removals, styles removed, deep clean stats)
+- Before/after file sizes
+- Verification results (expected vs unexpected removals, preserve violations)
 
 ### When Making Changes
 
-1. Run against all sample DOCX files with `--dry-run -v` to verify detection behavior
-2. Run a full clean and open the output in Word to verify formatting is preserved
-3. Compare file sizes before/after for deep clean changes
-4. Check that `--deep-only` and `--styles-only` modes still work independently
+1. Run the GUI against all sample DOCX files
+2. Open the output in Word to verify formatting is preserved
+3. Compare file sizes before/after
+4. Check the verification output for unexpected removals or preserve violations
 
 ## Common Modification Scenarios
 
 ### Adding a New Detection Pattern
 
 1. Add regex patterns to the appropriate section in `patterns.yaml`
-2. Test with `--dry-run -v` to verify matches
+2. Run the GUI and check the log output to verify matches
 3. No code changes needed for simple pattern additions
 
 ### Adding a New Content Type
@@ -242,14 +211,14 @@ python speccleanse.py "test_file.docx" output.docx --deep -v
 2. Create a new detector class extending `BaseDetector`
 3. Register it in `DetectionEngine._create_detectors()`
 4. Add corresponding patterns to `patterns.yaml`
-5. Update `print_result()` in `speccleanse.py` if special reporting is needed
 
 ### Adding a New Deep Clean Operation
 
-1. Add analysis logic in `deep_cleaner.py` (scan phase)
-2. Add removal logic in the clean phase
-3. Add a `--no-<operation>` CLI flag in `speccleanse.py`
-4. Update `OrphanReport` dataclass if new data is tracked
+1. Add analysis logic in `OrphanAnalyzer` in `deep_cleaner.py` (scan phase)
+2. Add removal logic in `DeepCleaner` (clean phase)
+3. Call the new method from `DeepCleaner.clean()`
+4. Update `DeepCleanResult` dataclass if new metrics are tracked
+5. Add logging for the new metric in `gui.py` `_clean_one()`
 
 ### Modifying XML Processing
 
@@ -263,7 +232,8 @@ python speccleanse.py "test_file.docx" output.docx --deep -v
 - **DOCX only** — does not handle `.doc` (legacy binary format)
 - **Direct XML manipulation** — not using `python-docx`, so changes must be XML-aware
 - **RSID stripping uses regex** on serialized XML strings for performance, not parsed XML
-- **Style dependency resolution** uses transitive closure (basedOn → link → next chains)
+- **Style dependency resolution** uses transitive closure (basedOn -> link -> next chains)
 - **Protected styles** in `style_cleaner.py` (Normal, Heading1-9, etc.) must never be removed
 - **Temp files** are created with `tempfile.mkdtemp(prefix="speccleanse_")` and cleaned up in `finally` blocks
-- **The patterns.yaml file** must be in the same directory as `speccleanse.py` by default (or specified with `-c`)
+- **The patterns.yaml file** must be in the same directory as `gui.py`
+- **Deep clean always runs aggressive compat removal** — removes entire `<w:compat>` blocks
