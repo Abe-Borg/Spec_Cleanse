@@ -646,6 +646,29 @@ class DeepCleaner:
         self.orphan_report = orphan_report
         self.verbose = verbose
         self.result = DeepCleanResult()
+
+    @staticmethod
+    def _safe_remove(elem: etree._Element) -> None:
+        """Remove an XML element while preserving its tail text.
+
+        In lxml, ``parent.remove(child)`` silently discards
+        ``child.tail``.  For inline elements such as ``<w:proofErr>``
+        or ``<w:bookmarkStart>`` that sit between runs inside a
+        paragraph, the tail may carry real document text.  This helper
+        re-attaches the tail to the preceding sibling (or to the
+        parent's text) before removing the element.
+        """
+        parent = elem.getparent()
+        if parent is None:
+            return
+        if elem.tail:
+            prev = elem.getprevious()
+            if prev is not None:
+                prev.tail = (prev.tail or "") + elem.tail
+            else:
+                parent.text = (parent.text or "") + elem.tail
+        parent.remove(elem)
+
     def clean(self) -> DeepCleanResult:
         """Perform deep cleaning based on orphan report.
 
@@ -814,7 +837,7 @@ class DeepCleaner:
                                 runs_to_remove.append(child)
                     
                     for run in runs_to_remove:
-                        parent.remove(run)
+                        self._safe_remove(run)
                         total_removed += 1
                         modified = True
                 
@@ -932,7 +955,7 @@ class DeepCleaner:
                             children_to_remove.append(child)
                 
                 for child in children_to_remove:
-                    parent.remove(child)
+                    self._safe_remove(child)
                     bookmarks_removed += 1
             
             if bookmarks_removed:
@@ -965,16 +988,16 @@ class DeepCleaner:
                             children_to_remove.append(child)
                     
                     for child in children_to_remove:
-                        parent.remove(child)
+                        self._safe_remove(child)
                         total_removed += 1
-                
+
                 if total_removed > 0:
                     tree.write(str(settings_path), xml_declaration=True, encoding='UTF-8', standalone=True)
 
-            
+
             except Exception as e:
                 self.result.warnings.append(f"Failed to clean proof state from settings: {e}")
-        
+
         # Clean document.xml
         doc_path = self.extract_dir / "word" / "document.xml"
         if doc_path.exists():
@@ -983,15 +1006,15 @@ class DeepCleaner:
                 tree = etree.parse(str(doc_path), parser)
                 root = tree.getroot()
                 doc_removed = 0
-                
+
                 for parent in root.iter():
                     children_to_remove = []
                     for child in parent:
                         if child.tag == f'{{{w_ns}}}proofErr':
                             children_to_remove.append(child)
-                    
+
                     for child in children_to_remove:
-                        parent.remove(child)
+                        self._safe_remove(child)
                         doc_removed += 1
                 
                 if doc_removed > 0:

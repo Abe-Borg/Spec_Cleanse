@@ -42,7 +42,15 @@ class ParagraphInfo:
 
     @property
     def has_editorial_formatting(self) -> bool:
-        """True if formatting signals suggest editorial/specifier content."""
+        """True if formatting signals suggest editorial/specifier content.
+
+        Note: the verify classification layer only trusts *strong* signals
+        (editorial style or hidden text) when deciding whether a removal is
+        expected.  Italic + colour is a weaker signal used by the detection
+        engine during the cleaning stage but is NOT sufficient on its own to
+        suppress a verification warning, because real spec content can also
+        be italic and coloured.
+        """
         return (
             self.has_editorial_style
             or self.is_hidden
@@ -101,13 +109,24 @@ class VerificationResult:
 # =============================================================================
 
 def _collect_xml_files(word_dir: Path) -> list[Path]:
-    """Return document.xml, headers, footers in a stable order."""
+    """Return document.xml, headers, footers, footnotes, and endnotes
+    in a stable order.
+
+    The deep-clean stage (RSID stripping in particular) processes *all*
+    XML files via ``rglob('*.xml')``, so the verification step must
+    also cover footnotes and endnotes to catch any accidental content
+    loss there.
+    """
     xml_files: list[Path] = []
     doc_xml = word_dir / "document.xml"
     if doc_xml.exists():
         xml_files.append(doc_xml)
     xml_files.extend(sorted(word_dir.glob("header*.xml")))
     xml_files.extend(sorted(word_dir.glob("footer*.xml")))
+    for extra in ("footnotes.xml", "endnotes.xml"):
+        p = word_dir / extra
+        if p.exists():
+            xml_files.append(p)
     return xml_files
 
 
@@ -348,10 +367,30 @@ def verify_clean(
     matcher = difflib.SequenceMatcher(None, input_texts, output_texts)
 
     removed: list[RemovedParagraph] = []
-    for tag, i1, i2, _j1, _j2 in matcher.get_opcodes():
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag in ("delete", "replace"):
+            # For 'replace' ops, build a set of the replacement output
+            # texts so we can detect paragraphs that were merely *modified*
+            # (e.g. a run was stripped) rather than fully deleted.
+            output_replacement_texts: set[str] = set()
+            if tag == "replace":
+                output_replacement_texts = set(output_texts[j1:j2])
+
             for idx in range(i1, i2):
                 para_info = input_paras[idx]
+
+                # If a very similar paragraph exists in the replacement
+                # block, this is a modification (e.g. a hidden run was
+                # stripped) rather than a full removal.  Don't count it
+                # as a removal — that would misclassify the original as
+                # an "expected removal" and hide accidental text mutations.
+                if output_replacement_texts and any(
+                    difflib.SequenceMatcher(
+                        None, para_info.text, out_text
+                    ).ratio() >= 0.85
+                    for out_text in output_replacement_texts
+                ):
+                    continue
 
                 # Layer 0: check if this content should have been preserved
                 preserve_match = None
@@ -374,15 +413,20 @@ def verify_clean(
                 )
 
                 # Layer 2: formatting-based fallback
-                if category is None and para_info.has_editorial_formatting:
+                # Only trust strong signals (editorial style name or hidden
+                # text).  Italic + colour alone is too weak — real spec
+                # content can legitimately be italic and coloured, so using
+                # that as a blanket "expected" classifier can mask
+                # accidental content loss from the deep-clean stage.
+                if category is None and (
+                    para_info.has_editorial_style or para_info.is_hidden
+                ):
                     category = "formatting_based"
                     signals: list[str] = []
                     if para_info.has_editorial_style:
                         signals.append("editorial style")
                     if para_info.is_hidden:
                         signals.append("hidden text")
-                    if para_info.is_italic and para_info.has_editorial_color:
-                        signals.append("italic + editorial color")
                     pattern_str = "; ".join(signals)
 
                 removed.append(RemovedParagraph(

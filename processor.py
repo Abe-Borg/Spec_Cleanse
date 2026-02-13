@@ -175,6 +175,20 @@ class DocxProcessor:
             # Check if entire paragraph should be removed
             if self._should_remove_paragraph(para, para_detections):
                 elements_to_remove.append(("paragraph", para))
+            else:
+                # Paragraph survives — remove individual detected runs
+                # (e.g. hidden text runs in a mixed-content paragraph)
+                removed_para = {elem for _, elem in elements_to_remove}
+                if para not in removed_para:
+                    runs = list(para.iter(f"{W}r"))
+                    run_detections = [
+                        d for d in para_detections
+                        if d.element in runs
+                        and d.confidence >= 0.5
+                        and d.content_type != ContentType.PRESERVE
+                    ]
+                    for d in run_detections:
+                        elements_to_remove.append(("run", d.element))
 
         # Process runs not in paragraphs (rare but possible in headers/footers)
         for run in root.iter(f"{W}r"):
