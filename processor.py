@@ -11,7 +11,7 @@ import tempfile
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Iterator
+from typing import Optional
 from lxml import etree
 
 from detection import Detection, DetectionEngine, ContentType
@@ -35,9 +35,15 @@ def repack_docx(unpacked_dir: Path, output_path: Path):
     """Repack an unpacked directory into a DOCX (ZIP) file."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        content_types_path = unpacked_dir / "[Content_Types].xml"
+        if content_types_path.exists():
+            zf.write(content_types_path, "[Content_Types].xml")
+
         for root, dirs, files in os.walk(unpacked_dir):
             for file in files:
                 file_path = Path(root) / file
+                if file_path == content_types_path:
+                    continue
                 arcname = file_path.relative_to(unpacked_dir)
                 zf.write(file_path, arcname)
 
@@ -69,9 +75,10 @@ class DocxProcessor:
     5. Repack into new DOCX
     """
     
-    def __init__(self, engine: DetectionEngine, verbose: bool = False):
+    def __init__(self, engine: DetectionEngine, verbose: bool = False, dry_run: bool = False):
         self.engine = engine
         self.verbose = verbose
+        self.dry_run = dry_run
         self._temp_dir: Optional[Path] = None
     
     def process(self, input_path: Path, output_path: Path) -> ProcessingResult:
@@ -129,7 +136,8 @@ class DocxProcessor:
                         result.removed_count += 1
 
                 # Repack
-                repack_docx(unpacked_dir, output_path)
+                if not self.dry_run:
+                    repack_docx(unpacked_dir, output_path)
 
             finally:
                 # Cleanup temp directory
@@ -200,12 +208,13 @@ class DocxProcessor:
                 if self.engine.should_remove(run_detections):
                     elements_to_remove.append(("run", run))
 
-        # Remove detected elements
-        for elem_type, elem in elements_to_remove:
-            self._remove_element(elem, elem_type)
+        if not self.dry_run:
+            # Remove detected elements
+            for elem_type, elem in elements_to_remove:
+                self._remove_element(elem, elem_type)
 
-        # Write back
-        tree.write(str(xml_path), xml_declaration=True, encoding="UTF-8", standalone=True)
+            # Write back
+            tree.write(str(xml_path), xml_declaration=True, encoding="UTF-8", standalone=True)
 
         return detections
     
@@ -306,5 +315,4 @@ class DocxProcessor:
             if t.text:
                 texts.append(t.text)
         return "".join(texts)
-
 

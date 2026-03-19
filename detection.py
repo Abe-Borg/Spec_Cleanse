@@ -46,6 +46,7 @@ class PatternConfig:
     """Configuration for a pattern-based detector."""
     enabled: bool = True
     text_patterns: list[str] = field(default_factory=list)
+    low_confidence_patterns: list[str] = field(default_factory=list)
     formatting_signals: dict = field(default_factory=dict)
     style_names: list[str] = field(default_factory=list)
 
@@ -58,6 +59,7 @@ class BaseDetector:
     def __init__(self, config: PatternConfig):
         self.config = config
         self._compiled_patterns = None
+        self._compiled_low_confidence_patterns = None
     
     @property
     def compiled_patterns(self) -> list[re.Pattern]:
@@ -68,6 +70,16 @@ class BaseDetector:
                 for p in self.config.text_patterns
             ]
         return self._compiled_patterns
+
+    @property
+    def compiled_low_confidence_patterns(self) -> list[re.Pattern]:
+        """Lazily compile low-confidence regex patterns."""
+        if self._compiled_low_confidence_patterns is None:
+            self._compiled_low_confidence_patterns = [
+                re.compile(p, re.IGNORECASE | re.DOTALL)
+                for p in self.config.low_confidence_patterns
+            ]
+        return self._compiled_low_confidence_patterns
     
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
         """
@@ -281,7 +293,7 @@ class EditorialArtifactDetector(BaseDetector):
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
         if not self.config.enabled or not text.strip():
             return None
-        
+
         for pattern in self.compiled_patterns:
             if pattern.search(text):
                 return Detection(
@@ -289,9 +301,56 @@ class EditorialArtifactDetector(BaseDetector):
                     element=element,
                     text=text,
                     confidence=0.8,
-                    reason=f"Editorial artifact: {pattern.pattern}"
+                    reason=f"Editorial artifact (high-confidence): {pattern.pattern}"
                 )
-        
+
+        confidence = 0.0
+        reasons = []
+
+        matched_low_confidence_pattern = None
+        for pattern in self.compiled_low_confidence_patterns:
+            if pattern.search(text):
+                matched_low_confidence_pattern = pattern.pattern
+                confidence += 0.3
+                reasons.append(f"Low-confidence pattern: {pattern.pattern}")
+                break
+
+        if matched_low_confidence_pattern is None:
+            return None
+
+        style_names = self.config.style_names or []
+        fmt_colors = [
+            c.upper()
+            for c in self.config.formatting_signals.get("colors", [])
+        ]
+
+        if element.tag == f"{W}r":
+            formatting = self._get_run_formatting(element)
+            if formatting["italic"]:
+                confidence += 0.2
+                reasons.append("Italic text")
+            if formatting["color"] and formatting["color"].upper() in fmt_colors:
+                confidence += 0.3
+                reasons.append(f"Color: {formatting['color']}")
+            if formatting["style"] and formatting["style"] in style_names:
+                confidence += 0.8
+                reasons.append(f"Style: {formatting['style']}")
+
+        elif element.tag == f"{W}p":
+            para_style = self._get_paragraph_style(element)
+            if para_style and para_style in style_names:
+                confidence += 0.8
+                reasons.append(f"Paragraph style: {para_style}")
+
+        if confidence >= 0.5:
+            return Detection(
+                content_type=self.content_type,
+                element=element,
+                text=text,
+                confidence=min(confidence, 1.0),
+                reason="; ".join(reasons),
+            )
+
         return None
 
 
@@ -335,6 +394,7 @@ class DetectionEngine:
         return PatternConfig(
             enabled=section.get("enabled", True),
             text_patterns=section.get("text_patterns", []),
+            low_confidence_patterns=section.get("low_confidence_patterns", []),
             formatting_signals=section.get("formatting_signals", {}),
             style_names=(
                 section.get("paragraph_styles", []) + 
@@ -362,12 +422,16 @@ class DetectionEngine:
             section = self.config.get(section_name, {})
             config = self._make_pattern_config(section)
             
-            # Add style names for specifier note detector
-            if section_name == "specifier_notes":
+            # Add style names for detectors that use editorial style signals.
+            if section_name in {"specifier_notes", "editorial_artifacts"}:
                 config.style_names = (
                     style_config.get("paragraph_styles", []) +
                     style_config.get("character_styles", [])
                 )
+            if section_name == "editorial_artifacts":
+                specifier_fmt = self.config.get("specifier_notes", {}).get("formatting_signals", {})
+                if not config.formatting_signals:
+                    config.formatting_signals = specifier_fmt
             
             detectors.append(detector_class(config))
         
