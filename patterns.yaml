@@ -70,6 +70,8 @@ editorial_artifacts:
   enabled: true
   description: "Placeholder instructions and editing artifacts"
   
+  # High-confidence: bracketed/delimited content, clearly editorial.
+  # Safe to remove on text match alone.
   text_patterns:
     # Retain/delete instructions
     - 'retain\s+or\s+delete'
@@ -78,10 +80,6 @@ editorial_artifacts:
     - 'select\s+one'
     - 'choose\s+one'
     - 'delete\s+options?\s+not\s+(applicable|required|selected)'
-    - 'revise\s+as\s+required'
-    - 'edit\s+as\s+required'
-    - 'modify\s+as\s+required'
-    - 'coordinate\s+with\s+(architect|engineer|owner)'
     
     # Insert placeholders
     - '<insert\s*.*?>'
@@ -104,28 +102,32 @@ editorial_artifacts:
     - '\[tbd\]'
     - '\[n/a\]'
     - '\[pending\]'
-    - 'fill\s+in\s+(the\s+)?blank'
-    - 'complete\s+this\s+section'
-    - 'verify\s+(with|before|that\s+section)\s+'
 
     # MasterSpec / ARCOM editorial instructions
     - 'retain\s+.*?(paragraph|subparagraph)\s*(below|above)?'
     - 'copy\s+.*?(paragraph|subparagraph)\s*(below|above)?'
     - 'see\s+(evaluations|editing\s+instruction)'
-    - 'use\s+this\s+section\s+if'
-    - 'revise\s+this\s+section'
-    - 'this\s+section\s+uses\s+the\s+term'
-    - 'coordinate\s+specifications\s+for'
     
     # Section markers that aren't content
     - '---+\s*optional\s*---+'
     - '===+\s*optional\s*===+'
     - '\*{3,}\s*optional\s*\*{3,}'
     
-    # BSD/MasterSpec style markers
-    - '^\s*\.\s*\d+\s*$'               # Just a number like ".1" alone
+  # Low-confidence: prose patterns that need formatting confirmation.
+  # These start below the removal threshold and require editorial signals.
+  low_confidence_patterns:
+    - 'revise\s+as\s+required'
+    - 'edit\s+as\s+required'
+    - 'modify\s+as\s+required'
+    - 'to\s+be\s+determined'
+    - 'fill\s+in\s+(the\s+)?blank'
+    - 'complete\s+this\s+section'
     - 'optional\s+paragraph'
     - 'alternate\s+paragraph'
+    - 'use\s+this\s+section\s+if'
+    - 'revise\s+this\s+section'
+    - 'this\s+section\s+uses\s+the\s+term'
+    - 'coordinate\s+specifications\s+for'
 
 # Content that should NEVER be removed (whitelist)
 preserve_patterns:
