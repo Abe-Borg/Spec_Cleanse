@@ -69,9 +69,29 @@ specagent_references:
 editorial_artifacts:
   enabled: true
   description: "Placeholder instructions and editing artifacts"
-  
-  # High-confidence: bracketed/delimited content, clearly editorial.
-  # Safe to remove on text match alone.
+
+  # ── Two-tier confidence system ──────────────────────────────────────
+  #
+  # text_patterns (high-confidence):
+  #   Matched content gets confidence 0.8 — above the 0.5 removal
+  #   threshold on text match alone.  Use this tier for patterns that
+  #   are unambiguously editorial: bracketed placeholders, explicit
+  #   retain/delete instructions, delimited markers.
+  #
+  # low_confidence_patterns:
+  #   Matched content starts at confidence 0.3 — below the removal
+  #   threshold.  It will ONLY be removed if editorial formatting
+  #   signals push it past 0.5:
+  #     +0.2  italic text
+  #     +0.3  editorial color (red, dark red, blue, light blue)
+  #     +0.8  editorial paragraph or character style
+  #
+  #   Use this tier for bare-prose patterns that could plausibly
+  #   appear in real specification content (e.g., "revise as required",
+  #   "coordinate specifications for").
+  # ────────────────────────────────────────────────────────────────────
+
+  # High-confidence patterns — safe to remove on text match alone.
   text_patterns:
     # Retain/delete instructions
     - 'retain\s+or\s+delete'
@@ -98,7 +118,6 @@ editorial_artifacts:
     # Common editing instructions
     - 'delete\s+this\s+(paragraph|section|line)'
     - 'remove\s+this\s+(paragraph|section|line)'
-    - 'to\s+be\s+determined'
     - '\[tbd\]'
     - '\[n/a\]'
     - '\[pending\]'
@@ -113,8 +132,7 @@ editorial_artifacts:
     - '===+\s*optional\s*===+'
     - '\*{3,}\s*optional\s*\*{3,}'
     
-  # Low-confidence: prose patterns that need formatting confirmation.
-  # These start below the removal threshold and require editorial signals.
+  # Low-confidence patterns — require formatting confirmation to remove.
   low_confidence_patterns:
     - 'revise\s+as\s+required'
     - 'edit\s+as\s+required'
