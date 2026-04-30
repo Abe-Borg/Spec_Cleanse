@@ -2,45 +2,46 @@
 
 ## Project Overview
 
-SpecCleanse is a Python GUI tool that removes unnecessary content from specification Word documents (.docx) while preserving all formatting and styles. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate editorial content, tracking metadata, and other cruft that should be removed before final publication.
+SpecCleanse is a Python GUI tool that removes editorial noise from specification Word documents (.docx) before LLM analysis. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate specifier notes, copyright boilerplate, hidden text, and editing instructions that should be stripped before further processing.
 
-The application runs through a Tkinter GUI and always performs a maximum-strength clean: shallow content removal + unused style cleanup + aggressive deep clean with all operations enabled.
+The application runs through a Tkinter GUI and performs **single-pass shallow content removal** followed by an automatic verification pass.
 
 ## Architecture
 
-### Three-Stage Cleaning Pipeline
+### Single-Stage Cleaning Pipeline
 
-Every clean runs all three stages in sequence:
-1. **Shallow Clean** — Content-level removal of editorial/specifier content using confidence-scored pattern detection
-2. **Style Clean** — Unused style removal via dependency graph analysis
-3. **Deep Clean** — ZIP/XML-level optimization that removes orphaned resources, RSID tracking, empty elements, compat blocks, and other accumulated cruft
+Every clean run performs:
+1. **Shallow content removal** — pattern + formatting detection inside `document.xml`, headers, footers, footnotes, and endnotes
+2. **Verification** — input/output comparison classifies every removed paragraph as expected, unexpected, or a preserve violation
+
+There is no longer a "deep clean" or "style clean" stage in the active pipeline. Earlier versions had ZIP/XML structural optimization and unused-style removal stages; both were retired because they changed document metadata without meaningfully improving downstream LLM extraction. Their source still lives in `legacy/` for reference but is not imported by the running app.
 
 ### Module Responsibilities
 
 | Module | Purpose |
 |--------|---------|
-| `gui.py` | Tkinter GUI — entry point, orchestrates all three cleaning stages, verification, progress/logging |
+| `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
 | `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
-| `processor.py` | DOCX unpacking/repacking (`repack_docx` utility), XML content walking, element removal |
-| `deep_cleaner.py` | Orphan analysis, RSID stripping, cruft removal at ZIP/XML level |
-| `style_cleaner.py` | Unused style detection via dependency graph analysis |
-| `verify.py` | Post-processing verification comparing input vs output |
+| `processor.py` | DOCX unpacking/repacking, XML walking, element removal |
+| `verify.py` | Post-processing verification comparing input vs. output paragraphs |
+| `legacy/deep_cleaner.py` | Archived; not used |
+| `legacy/style_cleaner.py` | Archived; not used |
 
 ### Configuration
 
 | File | Purpose |
 |------|---------|
-| `patterns.yaml` | All detection patterns, formatting signals, preserve rules (fully customizable) |
-| `requirements.txt` | Pinned Python dependencies |
+| `patterns.yaml` | All detection patterns, formatting signals, preserve rules |
+| `requirements.txt` | Pinned Python dependencies (UTF-8) |
 
 ### Data Flow
 
 ```
 input.docx
-  → Shallow: unpack ZIP → parse XML → detect → remove → repack
-  → Styles: unpack output → analyze dependency graph → remove unused → repack
-  → Deep: unpack output → orphan analysis → cruft scan → remove all → validate → repack
-  → Verify: compare input vs output, classify removals
+  → unpack ZIP → parse XML (document/headers/footers/footnotes/endnotes)
+  → detect → remove (collect-then-remove with tail-text preservation)
+  → repack
+  → verify: diff input vs. output, classify removals
   → output_cleaned.docx
 ```
 
@@ -48,7 +49,7 @@ input.docx
 
 ### Strategy Pattern for Detectors
 
-All detectors extend `BaseDetector` in `detection.py` and implement `detect(element, text) -> Optional[Detection]`. The `DetectionEngine` orchestrates all registered detectors.
+All detectors extend `BaseDetector` in `detection.py` and implement `detect(element, text) -> Optional[Detection]`. The `DetectionEngine` orchestrates them.
 
 ```
 BaseDetector
@@ -57,7 +58,7 @@ BaseDetector
 ├── HiddenTextDetector
 ├── SpecAgentDetector
 ├── EditorialArtifactDetector
-└── PreserveDetector (overrides removals)
+└── PreserveDetector (short-circuits removals)
 ```
 
 To add a new detector:
@@ -67,22 +68,22 @@ To add a new detector:
 
 ### Confidence Scoring
 
-Detections are scored 0.0–1.0. Multiple signals boost confidence:
-- Text pattern match alone: ~0.6
-- Pattern + italic formatting: +0.2
-- Pattern + color match (red/blue): +0.3
-- Style name match: ~0.8+
-- Removal threshold: confidence >= 0.5
-- Preserve patterns always override removals regardless of confidence
+Detections are scored 0.0–1.0. Multiple signals combine:
+- Text pattern match alone: ~0.6 (specifier notes), 0.7 (copyright), 0.8 (high-confidence editorial), 1.0 (preserve / SpecAgent / hidden)
+- Italic formatting: +0.2
+- Editorial color (red, dark red, blue, light blue): +0.3
+- Editorial paragraph or character style: +0.8
+- Removal threshold: confidence ≥ 0.5
+- Preserve patterns short-circuit removals regardless of confidence
+
+`editorial_artifacts` uses a two-tier scheme: `text_patterns` are high-confidence and remove on text alone; `low_confidence_patterns` start at 0.3 and require a formatting signal to cross the threshold.
 
 ### Dataclass-Based Results
 
 Processing results are communicated via dataclasses, not exceptions:
 - `Detection` — individual content detection with confidence
 - `ProcessingResult` — aggregated results with errors list
-- `OrphanReport` — structured deep-clean findings
-- `DeepCleanResult` — deep cleaning outcomes
-- `StyleCleanResult` — style cleaning outcomes
+- `RemovedParagraph` / `VerificationResult` — verification output
 
 Errors accumulate in result objects; processing doesn't halt on non-fatal issues.
 
@@ -92,7 +93,6 @@ The project uses `lxml` for direct XML manipulation rather than `python-docx`. T
 - Preserving exact formatting through XML structure
 - Handling Word namespace complexity
 - Safe element removal with tail-text preservation
-- RSID stripping via regex on raw XML strings (performance optimization)
 
 ### XML Namespace Handling
 
@@ -114,7 +114,18 @@ NAMESPACES = {
 
 ### Safe Element Removal
 
-Elements marked for removal are collected during iteration, then removed in a second pass. Tail text (text nodes after an element) is preserved by appending to the previous sibling or parent. Parent link existence is verified before any removal.
+Elements marked for removal are collected during iteration, then removed in a second pass. Tail text (text nodes after an element) is preserved by appending to the previous sibling or parent. Parent existence is verified before any removal.
+
+### Files Walked
+
+`processor.py` and `verify.py` both walk the same set of XML files inside the `word/` directory:
+- `document.xml`
+- `header*.xml`
+- `footer*.xml`
+- `footnotes.xml`
+- `endnotes.xml`
+
+Keep these two lists in sync. If you add coverage for a new XML file in one place, add it to the other.
 
 ## Code Conventions
 
@@ -125,7 +136,7 @@ Elements marked for removal are collected during iteration, then removed in a se
 - **PascalCase** for classes
 - **UPPER_CASE** for constants and module-level namespace strings
 - **Type hints** on all function signatures
-- **Dataclasses** with `@dataclass` for structured data (not plain dicts)
+- **Dataclasses** for structured data (not plain dicts)
 - **Enum** types for categorical constants (`ContentType`)
 - **Docstrings** on all modules, classes, and public methods
 
@@ -135,13 +146,12 @@ Only two external dependencies — keep it minimal:
 - `lxml==6.0.2` — XML parsing and manipulation
 - `PyYAML==6.0.3` — YAML configuration loading
 
-Do not add new dependencies without strong justification.
+`tkinter` is part of the standard library. Do not add new dependencies without strong justification.
 
 ### Error Handling
 
-- Results objects accumulate errors without stopping execution
+- Result objects accumulate errors without stopping execution
 - Graceful degradation: warnings don't fail the entire operation
-- Validation of document structure post-cleaning (deep clean)
 - GUI continues processing remaining files even if one fails
 
 ### File Organization
@@ -156,7 +166,7 @@ Do not add new dependencies without strong justification.
 ### Prerequisites
 
 ```bash
-pip install lxml pyyaml
+pip install -r requirements.txt
 ```
 
 ### Usage
@@ -165,44 +175,37 @@ pip install lxml pyyaml
 python gui.py
 ```
 
-The GUI runs maximum-strength cleaning (shallow + styles + deep with all options enabled, including aggressive compat removal) on one or more DOCX files. It uses tkinter (Python standard library — no extra dependencies). Processing runs in a background thread with a live log and progress bar.
-
 1. Click **Add Files...** to select one or more `.docx` files
-2. Optionally choose an **Output Folder** (defaults to same folder as input, with `_cleaned` suffix)
-3. Click **CLEAN**
+2. Optionally click **Output Folder...** (defaults to same folder as input, with `_cleaned` suffix)
+3. Click **Preview** for a dry-run report, or **CLEAN** to write `*_cleaned.docx`
+
+Processing runs on a background thread with a live log and progress bar.
 
 ## Testing
 
 ### Current Approach
 
-There is no automated test suite. Testing is done manually with sample DOCX files in the repository root:
-- `NVES.docx`
-- `the_grove_spec.docx`
-- `P247050.00 - TrueCare 1595 - Specs.docx`
-- `weird spec.docx`
-
-Test output goes to `spec_testing/` (gitignored).
+There is no automated test suite. Testing is done manually with sample DOCX files placed in the repository root. Test output goes to `spec_testing/` (gitignored).
 
 ### Manual Testing Workflow
 
 Run the GUI against sample files. The log output shows:
-- Per-stage item counts (shallow removals, styles removed, deep clean stats)
+- Per-file removed/preserved counts
 - Before/after file sizes
-- Verification results (expected vs unexpected removals, preserve violations)
+- Verification results (expected, unexpected, preserve violations)
 
 ### When Making Changes
 
-1. Run the GUI against all sample DOCX files
+1. Run the GUI against representative DOCX files (with and without footnotes/headers)
 2. Open the output in Word to verify formatting is preserved
-3. Compare file sizes before/after
-4. Check the verification output for unexpected removals or preserve violations
+3. Check the verification output for unexpected removals or preserve violations
 
 ## Common Modification Scenarios
 
 ### Adding a New Detection Pattern
 
 1. Add regex patterns to the appropriate section in `patterns.yaml`
-2. Run the GUI and check the log output to verify matches
+2. Run the GUI's Preview mode and check the log to verify matches
 3. No code changes needed for simple pattern additions
 
 ### Adding a New Content Type
@@ -211,29 +214,19 @@ Run the GUI against sample files. The log output shows:
 2. Create a new detector class extending `BaseDetector`
 3. Register it in `DetectionEngine._create_detectors()`
 4. Add corresponding patterns to `patterns.yaml`
-
-### Adding a New Deep Clean Operation
-
-1. Add analysis logic in `OrphanAnalyzer` in `deep_cleaner.py` (scan phase)
-2. Add removal logic in `DeepCleaner` (clean phase)
-3. Call the new method from `DeepCleaner.clean()`
-4. Update `DeepCleanResult` dataclass if new metrics are tracked
-5. Add logging for the new metric in `gui.py` `_clean_one()`
+5. Add the new category to `_build_removal_patterns` in `verify.py` so verification recognizes it
 
 ### Modifying XML Processing
 
-- Always test with documents containing headers, footers, and footnotes (not just document.xml)
-- Verify namespace handling — Word uses many namespaces and different XML files may need different namespace maps
-- When removing elements, handle tail text preservation
+- Always test with documents containing headers, footers, and footnotes
+- Verify namespace handling — Word uses many namespaces
+- Handle tail text preservation when removing elements
 - Never modify XML during iteration; collect targets first, then remove
 
 ## Important Caveats
 
 - **DOCX only** — does not handle `.doc` (legacy binary format)
 - **Direct XML manipulation** — not using `python-docx`, so changes must be XML-aware
-- **RSID stripping uses regex** on serialized XML strings for performance, not parsed XML
-- **Style dependency resolution** uses transitive closure (basedOn -> link -> next chains)
-- **Protected styles** in `style_cleaner.py` (Normal, Heading1-9, etc.) must never be removed
+- **No structural/style optimization** — those stages were retired; the cleaner only removes content
 - **Temp files** are created with `tempfile.mkdtemp(prefix="speccleanse_")` and cleaned up in `finally` blocks
-- **The patterns.yaml file** must be in the same directory as `gui.py`
-- **Deep clean always runs aggressive compat removal** — removes entire `<w:compat>` blocks
+- **`patterns.yaml`** must be in the same directory as `gui.py`

@@ -280,16 +280,20 @@ class SpecCleanseGUI:
         self.lbl_status = ttk.Label(outer, text="Ready", style="Sub.TLabel")
         self.lbl_status.pack(anchor="w")
 
+        log_frame = ttk.Frame(outer)
+        log_frame.pack(fill="both", expand=True, pady=(4, 0))
+
         self.log_text = tk.Text(
-            outer, height=12, wrap="word",
+            log_frame, height=12, wrap="word",
             bg=BG_LIGHT, fg=FG, insertbackground=FG,
             font=("Consolas", 9), relief="flat", borderwidth=0,
             highlightthickness=1, highlightcolor=SURFACE, highlightbackground=SURFACE,
             state="disabled",
         )
-        self.log_text.pack(fill="both", expand=True, pady=(4, 0))
+        self.log_text.pack(side="left", fill="both", expand=True)
 
-        log_sb = ttk.Scrollbar(outer, orient="vertical", command=self.log_text.yview)
+        log_sb = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        log_sb.pack(side="right", fill="y")
         self.log_text.configure(yscrollcommand=log_sb.set)
 
     def _add_files(self):
