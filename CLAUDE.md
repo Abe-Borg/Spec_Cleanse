@@ -4,7 +4,10 @@
 
 SpecCleanse is a Python GUI tool that removes editorial noise from specification Word documents (.docx) before LLM analysis. It targets architectural/engineering specification workflows where master spec templates (MasterSpec, BSD SpecLink, ARCOM) accumulate specifier notes, copyright boilerplate, hidden text, and editing instructions that should be stripped before further processing.
 
-The application runs through a Tkinter GUI and performs **single-pass shallow content removal** followed by an automatic verification pass.
+The application runs through a Tkinter GUI. It supports two workflows:
+
+- **CLEAN** — single-pass content removal followed by an automatic verification pass (removes everything detected: notes, copyright, hidden text, SpecAgent watermarks, editorial artifacts).
+- **Inspect Notes** — extracts every detected specifier note with its location (XML part, paragraph index, nearest preceding heading) and lets the user pick which ones to delete via checkboxes. The targeted removal writes a new DOCX directly without involving Word.
 
 ## Architecture
 
@@ -20,9 +23,10 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 
 | Module | Purpose |
 |--------|---------|
-| `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
+| `gui.py` | Tkinter GUI — entry point, runs preview/inspect/clean in a background thread, manages logging and progress |
 | `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal |
+| `notes.py` | Per-note specifier-note extraction (with location info) and targeted, user-selected removal |
 | `verify.py` | Post-processing verification comparing input vs. output paragraphs |
 | `legacy/deep_cleaner.py` | Archived; not used |
 | `legacy/style_cleaner.py` | Archived; not used |
@@ -177,7 +181,7 @@ python gui.py
 
 1. Click **Add Files...** to select one or more `.docx` files
 2. Optionally click **Output Folder...** (defaults to same folder as input, with `_cleaned` suffix)
-3. Click **Preview** for a dry-run report, or **CLEAN** to write `*_cleaned.docx`
+3. Click **Preview** for a dry-run report, **Inspect Notes** to review specifier notes one by one and delete only the ones you choose (single file at a time), or **CLEAN** to write `*_cleaned.docx` (removes everything detected)
 
 Processing runs on a background thread with a live log and progress bar.
 
