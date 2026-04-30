@@ -128,6 +128,13 @@ class DocxProcessor:
                     footer_detections = self._process_xml_file(footer_path)
                     result.detections.extend(footer_detections)
 
+                # Process footnotes and endnotes (kept in sync with verify.py)
+                for extra in ("footnotes.xml", "endnotes.xml"):
+                    extra_path = unpacked_dir / "word" / extra
+                    if extra_path.exists():
+                        extra_detections = self._process_xml_file(extra_path)
+                        result.detections.extend(extra_detections)
+
                 # Count results
                 for d in result.detections:
                     if d.content_type == ContentType.PRESERVE:
@@ -186,16 +193,9 @@ class DocxProcessor:
             else:
                 # Paragraph survives — remove individual detected runs
                 # (e.g. hidden text runs in a mixed-content paragraph)
-                removed_para = {elem for _, elem in elements_to_remove}
-                if para not in removed_para:
-                    runs = list(para.iter(f"{W}r"))
-                    run_detections = [
-                        d for d in para_detections
-                        if d.element in runs
-                        and d.confidence >= 0.5
-                        and d.content_type != ContentType.PRESERVE
-                    ]
-                    for d in run_detections:
+                runs = set(para.iter(f"{W}r"))
+                for d in para_detections:
+                    if d.element in runs and d.content_type != ContentType.PRESERVE:
                         elements_to_remove.append(("run", d.element))
 
         # Process runs not in paragraphs (rare but possible in headers/footers)
