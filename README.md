@@ -4,7 +4,10 @@ SpecCleanse is a Python desktop app that removes editorial noise from `.docx` sp
 
 ## What it does
 
-SpecCleanse performs a **single-pass content clean** and keeps document structure intact.
+SpecCleanse offers two workflows, both of which keep document structure intact:
+
+- **CLEAN** — single-pass automatic removal of every detected category (below).
+- **Inspect Notes** — list every specifier note with its location, tick the ones you want gone, and the tool writes a new `.docx` with only those notes removed. Word does not need to be open (and on Windows must NOT be open on the input file).
 
 It removes five categories:
 
@@ -41,8 +44,10 @@ python gui.py
 
 1. Click **Add Files...** and select one or more `.docx` files.
 2. (Optional) choose **Output Folder...**.
-3. Click **Preview** to run a dry-run detection report.
-4. Click **CLEAN** to write cleaned documents (`*_cleaned.docx`).
+3. Pick a workflow:
+   - **Preview** — dry-run detection report (does not write any files).
+   - **Inspect Notes** — opens a review window listing every specifier note with its location (e.g. *"Main body, ¶47 — under PART 2 - PRODUCTS"*) and a checkbox. Tick the notes to delete, then click **Delete Selected** to write a new `.docx`. Inspect Notes works on one file at a time.
+   - **CLEAN** — full single-pass cleanup that removes every detected category and writes `*_cleaned.docx`.
 
 ## Detection configuration
 
@@ -72,6 +77,7 @@ Spec_Cleanse/
 ├── gui.py
 ├── detection.py
 ├── processor.py
+├── notes.py
 ├── verify.py
 ├── patterns.yaml
 ├── legacy/
