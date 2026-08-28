@@ -78,5 +78,33 @@ Spec_Cleanse/
 │   ├── style_cleaner.py
 │   ├── deep_cleaner.py
 │   └── README.md
-└── README.md
+├── README.md
+└── LICENSE.md
 ```
+
+## License
+
+SpecCleanse is **source available**, not open source, under the
+[PolyForm Noncommercial License 1.0.0](./LICENSE.md).
+
+You may use, modify, fork, and redistribute SpecCleanse **for any noncommercial
+purpose** — personal projects, study, research, experimentation, and use by
+charitable organizations, educational institutions, public research bodies, and
+government institutions.
+
+**Commercial use requires a separate license from the copyright holder.** This
+includes use by architecture, engineering, and construction firms on billable or
+client work. To request a commercial license, open an issue on this repository.
+
+### Third-party components
+
+SpecCleanse depends on the following, all under permissive licenses. They are
+installed via `pip` rather than bundled, so no additional notices ship with this
+source distribution. If you build a standalone binary (e.g. PyInstaller), include
+their license texts in your distribution.
+
+| Component | License |
+|-----------|---------|
+| [lxml](https://lxml.de/) | BSD-3-Clause (bundles libxml2/libxslt, MIT) |
+| [PyYAML](https://pyyaml.org/) | MIT |
+| tkinter (Python standard library) | PSF-2.0 |
