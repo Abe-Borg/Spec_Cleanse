@@ -98,13 +98,19 @@ client work. To request a commercial license, open an issue on this repository.
 
 ### Third-party components
 
-SpecCleanse depends on the following, all under permissive licenses. They are
-installed via `pip` rather than bundled, so no additional notices ship with this
-source distribution. If you build a standalone binary (e.g. PyInstaller), include
-their license texts in your distribution.
+SpecCleanse depends on the following, all under permissive licenses. `lxml` and
+`PyYAML` are installed via `pip` rather than vendored, so no additional notices
+ship with this source distribution.
 
 | Component | License |
 |-----------|---------|
 | [lxml](https://lxml.de/) | BSD-3-Clause (bundles libxml2/libxslt, MIT) |
 | [PyYAML](https://pyyaml.org/) | MIT |
 | tkinter (Python standard library) | PSF-2.0 |
+| [Tcl and Tk](https://www.tcl.tk/) (runtimes behind `tkinter`) | TCL/TK License (BSD-style) |
+
+If you build a standalone binary (e.g. PyInstaller), it bundles all of the above
+and you must include their license texts in your distribution. Note that the Tcl
+and Tk runtimes are separately copyrighted from the PSF-licensed `tkinter`
+wrapper, and their license requires its notice be reproduced **verbatim** in any
+distribution.
