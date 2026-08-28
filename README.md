@@ -78,5 +78,39 @@ Spec_Cleanse/
 │   ├── style_cleaner.py
 │   ├── deep_cleaner.py
 │   └── README.md
-└── README.md
+├── README.md
+└── LICENSE.md
 ```
+
+## License
+
+SpecCleanse is **source available**, not open source, under the
+[PolyForm Noncommercial License 1.0.0](./LICENSE.md).
+
+You may use, modify, fork, and redistribute SpecCleanse **for any noncommercial
+purpose** — personal projects, study, research, experimentation, and use by
+charitable organizations, educational institutions, public research bodies, and
+government institutions.
+
+**Commercial use requires a separate license from the copyright holder.** This
+includes use by architecture, engineering, and construction firms on billable or
+client work. To request a commercial license, open an issue on this repository.
+
+### Third-party components
+
+SpecCleanse depends on the following, all under permissive licenses. `lxml` and
+`PyYAML` are installed via `pip` rather than vendored, so no additional notices
+ship with this source distribution.
+
+| Component | License |
+|-----------|---------|
+| [lxml](https://lxml.de/) | BSD-3-Clause (bundles libxml2/libxslt, MIT) |
+| [PyYAML](https://pyyaml.org/) | MIT |
+| tkinter (Python standard library) | PSF-2.0 |
+| [Tcl and Tk](https://www.tcl.tk/) (runtimes behind `tkinter`) | TCL/TK License (BSD-style) |
+
+If you build a standalone binary (e.g. PyInstaller), it bundles all of the above
+and you must include their license texts in your distribution. Note that the Tcl
+and Tk runtimes are separately copyrighted from the PSF-licensed `tkinter`
+wrapper, and their license requires its notice be reproduced **verbatim** in any
+distribution.
