@@ -17,12 +17,9 @@ from lxml import etree
 from detection import Detection, DetectionEngine, ContentType
 from docx_xml import (
     KEEP_ON_STRIP,
-    NAMESPACES,
-    P_TAG,
     R_TAG,
     T_TAG,
-    W,
-    W_NS,
+    accept_revisions,
     can_delete_paragraph,
     collect_content_parts,
     cut_spans,
@@ -32,12 +29,15 @@ from docx_xml import (
     iter_own_runs,
     iter_paragraphs,
     iter_text_nodes,
+    load_styles,
     merge_spans,
     orphaned_range_markers,
     paragraph_text,
     parse_xml,
+    remove_comment_parts,
     run_text,
     set_text,
+    strip_comment_markers,
     strip_text_leaves,
     tidy_spans,
     write_xml,
@@ -81,9 +81,6 @@ class ProcessingResult:
     input_path: Path
     output_path: Path
     detections: list[Detection] = field(default_factory=list)
-    removed_count: int = 0
-    preserved_count: int = 0
-    redacted_count: int = 0
     errors: list[str] = field(default_factory=list)
     
     @property
@@ -103,10 +100,20 @@ class DocxProcessor:
     5. Repack into new DOCX
     """
     
-    def __init__(self, engine: DetectionEngine, verbose: bool = False, dry_run: bool = False):
+    def __init__(
+        self,
+        engine: DetectionEngine,
+        verbose: bool = False,
+        dry_run: bool = False,
+        strip_revisions: bool = False,
+    ):
         self.engine = engine
         self.verbose = verbose
         self.dry_run = dry_run
+        # Accept tracked changes and drop comments before detection.  Deleted
+        # text lives in w:delText, which no text extractor sees, so without
+        # this it survives an ordinary clean along with its revision markup.
+        self.strip_revisions = strip_revisions
         self._temp_dir: Optional[Path] = None
     
     def process(self, input_path: Path, output_path: Path) -> ProcessingResult:
@@ -140,20 +147,18 @@ class DocxProcessor:
                 unpacked_dir = self._temp_dir / "unpacked"
                 self._unpack_docx(input_path, unpacked_dir)
 
+                # Resolve editorial styles against this document's own style
+                # table, so display names and w:basedOn chains are matched too.
+                self.engine.bind_styles(load_styles(unpacked_dir / "word"))
+
+                if self.strip_revisions and not self.dry_run:
+                    remove_comment_parts(unpacked_dir)
+
                 # Process every content-bearing part: document.xml, headers,
                 # footers, footnotes, endnotes, glossary (kept in sync with
                 # verify.py through docx_xml.collect_content_parts)
                 for xml_path in collect_content_parts(unpacked_dir / "word"):
                     result.detections.extend(self._process_xml_file(xml_path))
-
-                # Count results
-                for d in result.detections:
-                    if d.content_type == ContentType.PRESERVE:
-                        result.preserved_count += 1
-                    elif d.content_type == ContentType.INLINE_PLACEHOLDER:
-                        result.redacted_count += 1
-                    else:
-                        result.removed_count += 1
 
                 # Repack
                 if not self.dry_run:
@@ -163,6 +168,12 @@ class DocxProcessor:
                 # Cleanup temp directory
                 if self._temp_dir and self._temp_dir.exists():
                     shutil.rmtree(self._temp_dir)
+
+        except PermissionError:
+            result.errors.append(
+                f"Cannot write {output_path.name} — it is open in Word or "
+                "read-only.  Close the file and try again."
+            )
 
         except Exception as e:
             result.errors.append(f"Processing error: {str(e)}")
@@ -189,6 +200,10 @@ class DocxProcessor:
 
         tree = parse_xml(xml_path)
         root = tree.getroot()
+
+        revisions = 0
+        if self.strip_revisions:
+            revisions = accept_revisions(root) + strip_comment_markers(root)
 
         # Targets are collected during the walk and applied afterwards:
         # mutating the tree while iterating it skips elements.
@@ -232,7 +247,7 @@ class DocxProcessor:
         for para in paragraphs_to_remove:
             self._remove_paragraph(para)
 
-        if paragraphs_to_remove or runs_to_remove or redactions:
+        if paragraphs_to_remove or runs_to_remove or redactions or revisions:
             write_xml(tree, xml_path)
 
         return detections
@@ -281,8 +296,6 @@ class DocxProcessor:
         
         # Check paragraph-level detection (for style-based and full-paragraph patterns)
         para_detections = self.engine.detect_in_element(para, para_text)
-        for d in para_detections:
-            d.parent_paragraph = para
         detections.extend(para_detections)
         
         # Only check individual runs if paragraph wasn't already fully detected
@@ -300,10 +313,7 @@ class DocxProcessor:
                 if not text.strip():
                     continue
 
-                run_detections = self.engine.detect_in_element(run, text)
-                for d in run_detections:
-                    d.parent_paragraph = para
-                detections.extend(run_detections)
+                detections.extend(self.engine.detect_in_element(run, text))
         
         return detections
     

@@ -33,15 +33,18 @@ from lxml import etree
 from detection import DetectionEngine
 from docx_xml import (
     P_TAG,
-    TBL_TAG,
+    StyleIndex,
     TC_TAG,
     W,
     block_children,
     collect_content_parts,
     field_chars_balanced,
+    fold_style_names,
+    is_on,
     iter_own_runs,
     iter_paragraphs,
     load_config,
+    load_styles,
     orphaned_range_markers,
     paragraph_text,
     parse_xml,
@@ -190,6 +193,18 @@ class VerificationResult:
         )
 
     @property
+    def removed_characters(self) -> int:
+        """Characters of text the clean took out, removals and trims together.
+
+        A more honest measure of what changed than the file size, which mostly
+        reflects how the ZIP recompressed.
+        """
+        return (
+            sum(len(r.text) for r in self.removed)
+            + sum(len(fragment) for m in self.modified for fragment in m.fragments)
+        )
+
+    @property
     def passed(self) -> bool:
         return not (
             self.unexpected_removals
@@ -220,10 +235,12 @@ def extract_paragraphs(docx_path: Path, config: dict) -> list[ParagraphInfo]:
     the paragraph that owns them, not again through the run that contains it.
     """
     style_section = config.get("style_based_detection", {})
-    editorial_styles: set[str] = (
-        set(style_section.get("paragraph_styles", []))
-        | set(style_section.get("character_styles", []))
-        if style_section.get("enabled", True) else set()
+    editorial_styles = (
+        fold_style_names(
+            style_section.get("paragraph_styles", [])
+            + style_section.get("character_styles", [])
+        )
+        if style_section.get("enabled", True) else frozenset()
     )
 
     fmt_signals = config.get("specifier_notes", {}).get("formatting_signals", {})
@@ -231,11 +248,12 @@ def extract_paragraphs(docx_path: Path, config: dict) -> list[ParagraphInfo]:
 
     temp_dir = _unpack(docx_path)
     try:
+        styles = StyleIndex(load_styles(temp_dir / "word"))
         paragraphs: list[ParagraphInfo] = []
         for xml_path in collect_content_parts(temp_dir / "word"):
             root = parse_xml(xml_path).getroot()
             for para in iter_paragraphs(root, skip_alternate_fallback=True):
-                info = _describe_paragraph(para, editorial_styles, editorial_colors)
+                info = _describe_paragraph(para, styles, editorial_styles, editorial_colors)
                 if info.text:
                     paragraphs.append(info)
         return paragraphs
@@ -243,14 +261,10 @@ def extract_paragraphs(docx_path: Path, config: dict) -> list[ParagraphInfo]:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-def extract_text(docx_path: Path, config: dict | None = None) -> list[str]:
-    """Extract paragraph-level text from a DOCX file, in document order."""
-    return [p.text for p in extract_paragraphs(docx_path, config or {})]
-
-
 def _describe_paragraph(
     para: etree._Element,
-    editorial_styles: set[str],
+    styles: StyleIndex,
+    editorial_styles: frozenset[str],
     editorial_colors: set[str],
 ) -> ParagraphInfo:
     """Read one paragraph's text and editorial formatting signals."""
@@ -261,11 +275,13 @@ def _describe_paragraph(
     italic_runs = 0
     editorial_run_texts: list[str] = []
 
+    para_style = None
     ppr = para.find(f"{W}pPr")
     if ppr is not None:
         pstyle = ppr.find(f"{W}pStyle")
-        if pstyle is not None and pstyle.get(f"{W}val") in editorial_styles:
-            has_editorial_style = True
+        if pstyle is not None:
+            para_style = pstyle.get(f"{W}val")
+            has_editorial_style = styles.matches(para_style, editorial_styles)
 
     for run in iter_own_runs(para):
         text = run_text(run)
@@ -275,17 +291,26 @@ def _describe_paragraph(
 
         rpr = run.find(f"{W}rPr")
         run_italic = toggle_on(rpr, f"{W}i")
-        run_hidden = toggle_on(rpr, f"{W}vanish")
         run_colored = False
         run_styled = False
+        run_style = None
 
         if rpr is not None:
             color_elem = rpr.find(f"{W}color")
             if color_elem is not None:
                 run_colored = (color_elem.get(f"{W}val") or "").upper() in editorial_colors
             rstyle = rpr.find(f"{W}rStyle")
-            if rstyle is not None and rstyle.get(f"{W}val") in editorial_styles:
-                run_styled = True
+            if rstyle is not None:
+                run_style = rstyle.get(f"{W}val")
+                run_styled = styles.matches(run_style, editorial_styles)
+
+        # Hidden resolves as Word resolves it: an explicit w:vanish on the run
+        # wins (w:val="0" un-hides), otherwise the styles decide.
+        vanish = rpr.find(f"{W}vanish") if rpr is not None else None
+        if vanish is not None:
+            run_hidden = is_on(vanish)
+        else:
+            run_hidden = styles.is_hidden(run_style) or styles.is_hidden(para_style)
 
         italic_runs += bool(run_italic)
         has_editorial_color |= run_colored

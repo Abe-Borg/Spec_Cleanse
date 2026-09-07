@@ -6,7 +6,6 @@ from tests import docx_builder as db
 from tests.support import DocxTestCase
 
 try:
-    import tkinter  # noqa: F401
     import gui
     GUI_IMPORTABLE = True
 except ImportError:  # pragma: no cover - environments without Tk
@@ -23,7 +22,7 @@ DOCUMENT = db.document(
 )
 
 
-@unittest.skipUnless(GUI_IMPORTABLE, "tkinter is not available")
+@unittest.skipUnless(GUI_IMPORTABLE, "gui.py needs tkinter, which is unavailable")
 class WorkerTests(DocxTestCase):
 
     def setUp(self):

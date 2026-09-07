@@ -196,3 +196,17 @@ style_based_detection:
     - "SpecifierNote"
     - "EditorNote"
     - "Hidden"
+
+  # Structural styles that mark a heading, whatever its text says.  MasterSpec
+  # numbers parts and articles automatically, so the heading "PART 1 - GENERAL"
+  # extracts as just "GENERAL" and no text pattern can recognise it.
+  #
+  # A paragraph in one of these styles is protected whole: nothing inside it is
+  # removed or redacted.  That is why the requirement styles PR1 through PR5 are
+  # deliberately absent — they carry the body of the specification, which is
+  # exactly where the placeholders that need redacting live.
+  preserve_styles:
+    - "SCT"    # section title
+    - "PRT"    # part heading
+    - "ART"    # article heading
+    - "EOS"    # end of section

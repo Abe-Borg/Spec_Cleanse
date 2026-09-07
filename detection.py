@@ -11,7 +11,15 @@ from enum import Enum
 from typing import Optional
 from lxml import etree
 
-from docx_xml import W, W_NS, compile_patterns, merge_spans, toggle_on
+from docx_xml import (
+    W,
+    StyleIndex,
+    compile_patterns,
+    fold_style_names,
+    is_on,
+    merge_spans,
+    toggle_on,
+)
 
 
 class ContentType(Enum):
@@ -33,7 +41,6 @@ class Detection:
     text: str
     confidence: float  # 0.0 to 1.0
     reason: str
-    parent_paragraph: Optional[etree._Element] = None
     spans: list[tuple[int, int]] = field(default_factory=list)
     formatting_only: bool = False  # crossed the threshold on formatting alone
     
@@ -68,6 +75,12 @@ class BaseDetector:
         self.config = config
         self.compiled_patterns = config.text_patterns
         self.compiled_low_confidence_patterns = config.low_confidence_patterns
+        self.folded_style_names = fold_style_names(config.style_names)
+        self.style_index = StyleIndex()
+
+    def bind_styles(self, style_index: StyleIndex) -> None:
+        """Attach the style table of the document about to be processed."""
+        self.style_index = style_index
 
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
         """
@@ -75,6 +88,27 @@ class BaseDetector:
         Returns Detection if content should be removed, None otherwise.
         """
         raise NotImplementedError
+
+    def _style_matches(self, style_id: Optional[str]) -> bool:
+        """True if a style, or one it is based on, is configured as editorial."""
+        return self.style_index.matches(style_id, self.folded_style_names)
+
+    def _get_run_style(self, run: etree._Element) -> Optional[str]:
+        """Get the character style applied to a run."""
+        rpr = run.find(f"{W}rPr")
+        if rpr is None:
+            return None
+        style_elem = rpr.find(f"{W}rStyle")
+        return style_elem.get(f"{W}val") if style_elem is not None else None
+
+    def _get_owning_paragraph(self, element: etree._Element) -> Optional[etree._Element]:
+        """Walk up from a run to the paragraph that holds it."""
+        node = element.getparent()
+        while node is not None:
+            if node.tag == f"{W}p":
+                return node
+            node = node.getparent()
+        return None
     
     def _get_run_formatting(self, run: etree._Element) -> dict:
         """Extract formatting properties from a run."""
@@ -169,16 +203,14 @@ class SpecifierNoteDetector(BaseDetector):
                 reasons.append(f"Color: {formatting['color']}")
                 
             # Check character style
-            style_names = self.config.style_names or []
-            if formatting["style"] and formatting["style"] in style_names:
+            if self._style_matches(formatting["style"]):
                 content_score += 0.8
                 reasons.append(f"Style: {formatting['style']}")
         
         # Check paragraph style
         elif element.tag == f"{W}p":
             para_style = self._get_paragraph_style(element)
-            style_names = self.config.style_names or []
-            if para_style and para_style in style_names:
+            if self._style_matches(para_style):
                 content_score += 0.8
                 reasons.append(f"Paragraph style: {para_style}")
 
@@ -236,7 +268,7 @@ class CopyrightDetector(BaseDetector):
 
 
 class HiddenTextDetector(BaseDetector):
-    """Detects hidden text (vanish property)."""
+    """Detects hidden text, whether marked on the run or inherited from a style."""
     
     content_type = ContentType.HIDDEN_TEXT
     
@@ -247,18 +279,43 @@ class HiddenTextDetector(BaseDetector):
             # the run happens to be marked hidden breaks whatever it anchors.
             return None
 
-        # Check for vanish property in run
-        if element.tag == f"{W}r":
-            formatting = self._get_run_formatting(element)
-            if formatting["hidden"]:
-                return Detection(
-                    content_type=self.content_type,
-                    element=element,
-                    text=text,
-                    confidence=1.0,
-                    reason="Hidden text (vanish property)"
-                )
-        
+        if element.tag != f"{W}r":
+            return None
+
+        reason = self._hidden_reason(element)
+        if reason is None:
+            return None
+
+        return Detection(
+            content_type=self.content_type,
+            element=element,
+            text=text,
+            confidence=1.0,
+            reason=reason,
+        )
+
+    def _hidden_reason(self, run: etree._Element) -> Optional[str]:
+        """Why this run is hidden, or None if it is visible.
+
+        Hidden is resolved the way Word resolves it: an explicit ``w:vanish``
+        on the run wins outright — including ``w:val="0"``, which un-hides
+        text that would otherwise inherit hidden — and only in its absence
+        does the character style, and then the paragraph style, decide.
+        """
+        rpr = run.find(f"{W}rPr")
+        vanish = rpr.find(f"{W}vanish") if rpr is not None else None
+        if vanish is not None:
+            return "Hidden text (vanish property)" if is_on(vanish) else None
+
+        run_style = self._get_run_style(run)
+        if self.style_index.is_hidden(run_style):
+            return f"Hidden text (character style: {run_style})"
+
+        para = self._get_owning_paragraph(run)
+        para_style = self._get_paragraph_style(para) if para is not None else None
+        if self.style_index.is_hidden(para_style):
+            return f"Hidden text (paragraph style: {para_style})"
+
         return None
 
 
@@ -317,7 +374,6 @@ class EditorialArtifactDetector(BaseDetector):
         if matched_low_confidence_pattern is None:
             return self._detect_inline(element, text)
 
-        style_names = self.config.style_names or []
         fmt_colors = [
             c.upper()
             for c in self.config.formatting_signals.get("colors", [])
@@ -331,13 +387,13 @@ class EditorialArtifactDetector(BaseDetector):
             if formatting["color"] and formatting["color"].upper() in fmt_colors:
                 confidence += 0.3
                 reasons.append(f"Color: {formatting['color']}")
-            if formatting["style"] and formatting["style"] in style_names:
+            if self._style_matches(formatting["style"]):
                 confidence += 0.8
                 reasons.append(f"Style: {formatting['style']}")
 
         elif element.tag == f"{W}p":
             para_style = self._get_paragraph_style(element)
-            if para_style and para_style in style_names:
+            if self._style_matches(para_style):
                 confidence += 0.8
                 reasons.append(f"Paragraph style: {para_style}")
 
@@ -396,7 +452,21 @@ class PreserveDetector(BaseDetector):
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
         if not self.config.enabled or not text.strip():
             return None
-        
+
+        # Structural styles protect headings whose text alone gives nothing
+        # away: MasterSpec numbers its parts automatically, so the heading
+        # "PART 1 - GENERAL" extracts as just "GENERAL".
+        if element.tag == f"{W}p":
+            para_style = self._get_paragraph_style(element)
+            if self._style_matches(para_style):
+                return Detection(
+                    content_type=self.content_type,
+                    element=element,
+                    text=text,
+                    confidence=1.0,
+                    reason=f"Preserved style: {para_style}"
+                )
+
         for pattern in self.compiled_patterns:
             if pattern.search(text):
                 return Detection(
@@ -424,11 +494,25 @@ class DetectionEngine:
         """
         self.config = config
         self.detectors = self._create_detectors()
-        self.preserve_detector = PreserveDetector(
-            self._make_pattern_config(
-                config.get("preserve_patterns", {}), "preserve_patterns"
-            )
+
+        preserve_config = self._make_pattern_config(
+            config.get("preserve_patterns", {}), "preserve_patterns"
         )
+        style_config = config.get("style_based_detection", {})
+        if style_config.get("enabled", True):
+            preserve_config.style_names = style_config.get("preserve_styles", [])
+        self.preserve_detector = PreserveDetector(preserve_config)
+
+    def bind_styles(self, styles: dict) -> None:
+        """Attach the style table of the document about to be processed.
+
+        Called once per document, so style-based detection resolves display
+        names and ``w:basedOn`` chains against that document's own styles.xml.
+        """
+        style_index = StyleIndex(styles)
+        for detector in self.detectors:
+            detector.bind_styles(style_index)
+        self.preserve_detector.bind_styles(style_index)
 
     def _make_pattern_config(self, section: dict, section_name: str) -> PatternConfig:
         """Create PatternConfig from config section, compiling its patterns."""

@@ -13,7 +13,7 @@ text string the detectors match against.  It holds no detection policy.
 
 import re
 from collections.abc import Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -428,6 +428,135 @@ def orphaned_range_markers(elem: etree._Element) -> list[etree._Element]:
 
 
 # ---------------------------------------------------------------------------
+# Revisions and comments
+# ---------------------------------------------------------------------------
+
+#: Tracked changes whose content goes when the change is accepted.
+REVISION_DELETE_TAGS = (f"{W}del", f"{W}moveFrom")
+
+#: Tracked changes whose content stays; only the revision wrapper goes.
+REVISION_UNWRAP_TAGS = (f"{W}ins", f"{W}moveTo")
+
+#: Bookkeeping left behind by revision tracking: move ranges and the records
+#: of formatting changes.  None of it carries content.
+REVISION_MARKER_TAGS = (
+    f"{W}moveFromRangeStart",
+    f"{W}moveFromRangeEnd",
+    f"{W}moveToRangeStart",
+    f"{W}moveToRangeEnd",
+    f"{W}pPrChange",
+    f"{W}rPrChange",
+    f"{W}sectPrChange",
+    f"{W}tblPrChange",
+    f"{W}tblPrExChange",
+    f"{W}tcPrChange",
+    f"{W}trPrChange",
+    f"{W}cellIns",
+    f"{W}cellDel",
+    f"{W}cellMerge",
+)
+
+#: Comment anchors inside the document body.
+COMMENT_MARKER_TAGS = (
+    f"{W}commentRangeStart",
+    f"{W}commentRangeEnd",
+    f"{W}commentReference",
+)
+
+#: Comment parts of the package, removed together with their anchors.
+COMMENT_PARTS = (
+    "comments.xml",
+    "commentsExtended.xml",
+    "commentsIds.xml",
+    "commentsExtensible.xml",
+)
+
+
+def unwrap_element(elem: etree._Element) -> None:
+    """Replace an element with its children, in place."""
+    parent = elem.getparent()
+    if parent is None:
+        return
+    index = parent.index(elem)
+    for child in reversed(list(elem)):
+        parent.insert(index, child)
+    parent.remove(elem)
+
+
+def _remove_all(root: etree._Element, tags) -> int:
+    removed = 0
+    for tag in tags:
+        for elem in list(root.iter(tag)):
+            parent = elem.getparent()
+            if parent is not None:
+                parent.remove(elem)
+                removed += 1
+    return removed
+
+
+def accept_revisions(root: etree._Element) -> int:
+    """Accept every tracked change in one XML part.
+
+    Insertions keep their content and lose the revision wrapper; deletions go
+    with their ``w:delText``, which no text extractor can see and which
+    therefore survives an ordinary clean along with its markup.  A deleted
+    paragraph *mark* is not acted on — the paragraphs stay separate — because
+    merging them would move content the user never asked to move.
+    """
+    changed = _remove_all(root, REVISION_DELETE_TAGS)
+
+    for tag in REVISION_UNWRAP_TAGS:
+        for elem in list(root.iter(tag)):
+            if elem.getparent() is not None:
+                unwrap_element(elem)
+                changed += 1
+
+    return changed + _remove_all(root, REVISION_MARKER_TAGS)
+
+
+def strip_comment_markers(root: etree._Element) -> int:
+    """Remove comment anchors from one XML part."""
+    return _remove_all(root, COMMENT_MARKER_TAGS)
+
+
+def remove_comment_parts(unpacked_dir: Path) -> list[str]:
+    """Delete the comment parts of a package, with their bookkeeping.
+
+    A part left listed in the relationships or the content types after its
+    file is gone is a package Word will not open, so both are updated.
+    """
+    word_dir = unpacked_dir / "word"
+    removed = [name for name in COMMENT_PARTS if (word_dir / name).exists()]
+    if not removed:
+        return []
+
+    for name in removed:
+        (word_dir / name).unlink()
+
+    rels_path = word_dir / "_rels" / "document.xml.rels"
+    if rels_path.exists():
+        tree = parse_xml(rels_path)
+        rels_root = tree.getroot()
+        for rel in list(rels_root):
+            target = (rel.get("Target") or "").lstrip("/").rsplit("/", 1)[-1]
+            if target in removed:
+                rels_root.remove(rel)
+        write_xml(tree, rels_path)
+
+    types_path = unpacked_dir / "[Content_Types].xml"
+    if types_path.exists():
+        tree = parse_xml(types_path)
+        types_root = tree.getroot()
+        for override in list(types_root):
+            part_name = (override.get("PartName") or "").rsplit("/", 1)[-1]
+            if part_name in removed:
+                types_root.remove(override)
+        write_xml(tree, types_path)
+
+    return removed
+
+
+# ---------------------------------------------------------------------------
 # XML parts
 # ---------------------------------------------------------------------------
 
@@ -521,6 +650,61 @@ def load_styles(word_dir: Path) -> dict[str, StyleInfo]:
 def fold_style_name(name: str) -> str:
     """Normalise a style name/ID for comparison ("Specifier Note" == "specifiernote")."""
     return re.sub(r"[\s_-]+", "", name).lower()
+
+
+def fold_style_names(names) -> frozenset[str]:
+    """Fold a collection of configured style names for repeated comparison."""
+    return frozenset(fold_style_name(name) for name in names if name)
+
+
+class StyleIndex:
+    """Resolves a paragraph or run style ID against ``word/styles.xml``.
+
+    Comparing configured names to literal style IDs misses most of what firms
+    actually ship: a template derives its note style from ``CMT`` under some
+    other ID, or names it "Specifier Note" with a space, which no style ID can
+    ever equal.  This walks the ``w:basedOn`` chain and matches display names
+    as well as IDs.  With no styles part it degrades to folded ID matching,
+    which is still an improvement on exact equality.
+    """
+
+    def __init__(self, styles: dict[str, StyleInfo] | None = None):
+        self.styles = styles or {}
+
+    def chain(self, style_id: str | None) -> list[StyleInfo]:
+        """The style and everything it is based on, nearest first."""
+        resolved: list[StyleInfo] = []
+        seen: set[str] = set()
+        current = style_id
+        while current and current not in seen:
+            seen.add(current)
+            info = self.styles.get(current)
+            if info is None:
+                resolved.append(StyleInfo(style_id=current))
+                break
+            resolved.append(info)
+            current = info.based_on
+        return resolved
+
+    def matches(self, style_id: str | None, folded_names: frozenset[str]) -> bool:
+        """True if the style, or any style it inherits from, is one of ``folded_names``."""
+        if not style_id or not folded_names:
+            return False
+        for info in self.chain(style_id):
+            if fold_style_name(info.style_id) in folded_names:
+                return True
+            if info.name and fold_style_name(info.name) in folded_names:
+                return True
+        return False
+
+    def is_hidden(self, style_id: str | None) -> bool:
+        """True if the style, or one it inherits from, marks its text hidden.
+
+        MasterSpec hides its notes this way rather than on each run.
+        """
+        if not style_id:
+            return False
+        return any(info.hidden for info in self.chain(style_id))
 
 
 # ---------------------------------------------------------------------------

@@ -6,12 +6,16 @@ Tkinter-based graphical interface for SpecCleanse.
 Runs single-pass content removal and verification on one or more DOCX files.
 """
 
+import os
+import queue
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from detection import DetectionEngine, ContentType
 from docx_xml import load_config
@@ -41,9 +45,13 @@ def _shorten(text: str, width: int = 90) -> str:
     return flat if len(flat) <= width else flat[:width] + "..."
 
 
-def _preview_one(input_path: Path, engine: DetectionEngine, log) -> bool:
+def _preview_one(
+    input_path: Path, engine: DetectionEngine, log, strip_revisions: bool = False
+) -> bool:
     """Run a dry-run preview on a single file and log detections."""
-    processor = DocxProcessor(engine, verbose=False, dry_run=True)
+    processor = DocxProcessor(
+        engine, verbose=False, dry_run=True, strip_revisions=strip_revisions
+    )
 
     temp_dir = Path(tempfile.mkdtemp(prefix="speccleanse_preview_"))
     preview_output = temp_dir / f"{input_path.stem}_preview.docx"
@@ -113,9 +121,15 @@ def _group_detections(detections):
     return removed, redacted, preserved
 
 
-def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log) -> bool:
+def _clean_one(
+    input_path: Path,
+    output_path: Path,
+    engine: DetectionEngine,
+    log,
+    strip_revisions: bool = False,
+) -> bool:
     """Run single-pass content removal on a single file."""
-    processor = DocxProcessor(engine, verbose=False)
+    processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
     try:
         log("  Content removal...")
@@ -134,16 +148,12 @@ def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log
             f" redacted {len(redacted)} inline placeholder(s),"
             f" preserved {len(preserved)}")
 
-        original_size = input_path.stat().st_size
-        final_size = output_path.stat().st_size
-        saved = original_size - final_size
-        pct = (saved / original_size * 100) if original_size else 0
-
         log("  Verifying no spec content was lost...")
         vresult = verify_clean(input_path, output_path, engine=engine)
         _log_verification(vresult, log)
 
-        log(f"  Done: {original_size:,} -> {final_size:,} bytes ({pct:.1f}% smaller)")
+        log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
+            f" {vresult.removed_characters:,} characters of text taken out")
         return True
 
     except Exception as exc:
@@ -231,7 +241,11 @@ class SpecCleanseGUI:
         self.output_dir: Path | None = None
         self._running = False
 
+        # The worker thread writes log lines here; the main loop drains them.
+        self._log_queue: queue.Queue[str] = queue.Queue()
+
         self._build_ui()
+        self._drain_log()
 
     def _build_ui(self):
         style = ttk.Style()
@@ -270,6 +284,13 @@ class SpecCleanseGUI:
         )
         self.btn_add.pack(side="left")
 
+        self.btn_remove = tk.Button(
+            file_frame, text="Remove Selected", command=self._remove_selected,
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+        )
+        self.btn_remove.pack(side="left", padx=(8, 0))
+
         self.btn_clear = tk.Button(
             file_frame, text="Clear", command=self._clear_files,
             bg=SURFACE, fg=FG, activebackground=RED, activeforeground=BG,
@@ -284,7 +305,7 @@ class SpecCleanseGUI:
         list_frame.pack(fill="both", expand=False, pady=(0, 8))
 
         self.file_listbox = tk.Listbox(
-            list_frame, height=5,
+            list_frame, height=5, selectmode="extended",
             bg=BG_LIGHT, fg=FG, selectbackground=ACCENT, selectforeground=BG,
             font=("Consolas", 9), relief="flat", borderwidth=0,
             highlightthickness=1, highlightcolor=SURFACE, highlightbackground=SURFACE,
@@ -304,11 +325,33 @@ class SpecCleanseGUI:
         )
         self.btn_outdir.pack(side="left")
 
+        self.btn_open_outdir = tk.Button(
+            out_frame, text="Open Output Folder", command=self._open_output_dir,
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+        )
+        self.btn_open_outdir.pack(side="left", padx=(8, 0))
+
         self.lbl_outdir = ttk.Label(
             out_frame, text="Default: same folder as input, with _cleaned suffix",
             style="Sub.TLabel",
         )
         self.lbl_outdir.pack(side="left", padx=(12, 0))
+
+        option_frame = ttk.Frame(outer)
+        option_frame.pack(fill="x", pady=(0, 8))
+
+        self.strip_revisions = tk.BooleanVar(value=False)
+        self.chk_revisions = tk.Checkbutton(
+            option_frame,
+            text="Strip comments and accept tracked changes",
+            variable=self.strip_revisions,
+            bg=BG, fg=FG, selectcolor=BG_LIGHT, activebackground=BG,
+            activeforeground=FG, disabledforeground=FG_DIM,
+            font=("Segoe UI", 9), relief="flat", highlightthickness=0,
+            anchor="w",
+        )
+        self.chk_revisions.pack(side="left")
 
         action_frame = ttk.Frame(outer)
         action_frame.pack(pady=(4, 8))
@@ -365,6 +408,12 @@ class SpecCleanseGUI:
                 self.file_listbox.insert("end", str(pp))
         self._update_count()
 
+    def _remove_selected(self):
+        for index in sorted(self.file_listbox.curselection(), reverse=True):
+            self.file_listbox.delete(index)
+            del self.files[index]
+        self._update_count()
+
     def _clear_files(self):
         self.files.clear()
         self.file_listbox.delete(0, "end")
@@ -382,18 +431,53 @@ class SpecCleanseGUI:
             self.output_dir = Path(d)
             self.lbl_outdir.configure(text=str(self.output_dir))
 
+    def _open_output_dir(self):
+        """Open the folder the cleaned files go to in the system file browser."""
+        folder = self.output_dir
+        if folder is None and self.files:
+            folder = self.files[0].parent
+        if folder is None:
+            self._log("No output folder yet — add a file or choose one.")
+            return
+        if not folder.exists():
+            self._log(f"Folder does not exist: {folder}")
+            return
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)  # noqa: S606 - the platform's own file browser
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except OSError as exc:
+            self._log(f"Could not open {folder}: {exc}")
+
     def _output_for(self, input_path: Path, output_dir: Path | None = None) -> Path:
         stem = input_path.stem + "_cleaned"
         parent = output_dir if output_dir else input_path.parent
         return parent / (stem + ".docx")
 
     def _log(self, text: str):
-        def _append():
+        """Queue a line for the log; safe to call from the worker thread."""
+        self._log_queue.put(text)
+
+    def _drain_log(self):
+        """Move queued log lines into the widget, on the main thread."""
+        lines: list[str] = []
+        while True:
+            try:
+                lines.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        if lines:
             self.log_text.configure(state="normal")
-            self.log_text.insert("end", text + "\n")
+            self.log_text.insert("end", "\n".join(lines) + "\n")
             self.log_text.see("end")
             self.log_text.configure(state="disabled")
-        self.root.after(0, _append)
+
+        self.root.after(100, self._drain_log)
 
     def _set_status(self, text: str):
         self.root.after(0, lambda: self.lbl_status.configure(text=text))
@@ -411,22 +495,29 @@ class SpecCleanseGUI:
         for button in self._run_controls():
             button.configure(state="normal")
 
-    def _run_controls(self) -> list[tk.Button]:
-        """Buttons that must not be usable while a run is in flight.
+    def _run_controls(self) -> list[tk.Widget]:
+        """Controls that must not be usable while a run is in flight.
 
-        The output folder is included: the worker reads the destination once
-        at start, so leaving the button live let a mid-run change appear to
-        redirect files that were already on their way somewhere else.
+        Everything that feeds a run is included: each run works from the
+        selection, destination, and options it started with, so leaving these
+        live would only let a mid-run change look like it took effect.
         """
         return [
             self.btn_preview,
             self.btn_clean,
             self.btn_add,
+            self.btn_remove,
             self.btn_clear,
             self.btn_outdir,
+            self.chk_revisions,
         ]
 
     def _clear_log(self):
+        while True:
+            try:
+                self._log_queue.get_nowait()
+            except queue.Empty:
+                break
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
@@ -438,9 +529,45 @@ class SpecCleanseGUI:
             self._log("No files selected. Click 'Add Files...' first.")
             return
 
+        # Snapshot the inputs here, on the main thread: the run should finish
+        # against the selection, destination, and options it started with.
+        files = list(self.files)
+        output_dir = self.output_dir
+        strip_revisions = self.strip_revisions.get()
+
+        if not self._confirm_overwrite(files, output_dir):
+            return
+
         self._disable_controls()
         self._clear_log()
-        threading.Thread(target=self._run_clean, daemon=True).start()
+        threading.Thread(
+            target=self._run_clean,
+            args=(files, output_dir, strip_revisions),
+            daemon=True,
+        ).start()
+
+    def _confirm_overwrite(self, files: list[Path], output_dir: Path | None) -> bool:
+        """Ask before replacing cleaned files from an earlier run."""
+        existing = [
+            out for out in (self._output_for(f, output_dir) for f in files)
+            if out.exists()
+        ]
+        if not existing:
+            return True
+
+        listed = "\n".join(f"  {out.name}" for out in existing[:8])
+        if len(existing) > 8:
+            listed += f"\n  ...and {len(existing) - 8} more"
+
+        confirmed = messagebox.askyesno(
+            "Overwrite existing files?",
+            f"{len(existing)} cleaned file(s) already exist and will be "
+            f"replaced:\n\n{listed}",
+            parent=self.root,
+        )
+        if not confirmed:
+            self._log("Cancelled — nothing was written.")
+        return confirmed
 
     def _start_preview(self):
         if self._running:
@@ -449,9 +576,14 @@ class SpecCleanseGUI:
             self._log("No files selected. Click 'Add Files...' first.")
             return
 
+        files = list(self.files)
+        strip_revisions = self.strip_revisions.get()
+
         self._disable_controls()
         self._clear_log()
-        threading.Thread(target=self._run_preview, daemon=True).start()
+        threading.Thread(
+            target=self._run_preview, args=(files, strip_revisions), daemon=True
+        ).start()
 
     def _load_engine(self) -> DetectionEngine | None:
         """Build the detection engine once per run, reporting config errors.
@@ -467,9 +599,8 @@ class SpecCleanseGUI:
             self._set_status("Configuration error")
             return None
 
-    def _run_preview(self):
+    def _run_preview(self, files: list[Path], strip_revisions: bool = False):
         try:
-            files = list(self.files)
             engine = self._load_engine()
             if engine is None:
                 return
@@ -483,7 +614,7 @@ class SpecCleanseGUI:
                 self._set_progress((i - 1) / total * 100)
                 self._log(f"[{i}/{total}] {fpath.name} — Preview")
 
-                ok = _preview_one(fpath, engine, self._log)
+                ok = _preview_one(fpath, engine, self._log, strip_revisions)
                 if ok:
                     successes += 1
                 else:
@@ -507,12 +638,10 @@ class SpecCleanseGUI:
         finally:
             self.root.after(0, self._enable_controls)
 
-    def _run_clean(self):
+    def _run_clean(
+        self, files: list[Path], output_dir: Path | None, strip_revisions: bool = False
+    ):
         try:
-            # Snapshot the inputs: both are settable from the UI, and the run
-            # should finish against the selection it started with.
-            files = list(self.files)
-            output_dir = self.output_dir
             engine = self._load_engine()
             if engine is None:
                 return
@@ -527,7 +656,7 @@ class SpecCleanseGUI:
                 self._log(f"[{i}/{total}] {fpath.name}")
 
                 out = self._output_for(fpath, output_dir)
-                ok = _clean_one(fpath, out, engine, self._log)
+                ok = _clean_one(fpath, out, engine, self._log, strip_revisions)
                 if ok:
                     successes += 1
                     self._log(f"  -> {out.name}")

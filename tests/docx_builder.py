@@ -32,7 +32,11 @@ RELS = XML_HEAD + (
 )
 
 DOC_RELS = XML_HEAD + (
-    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId10" '
+    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" '
+    'Target="comments.xml"/>'
+    '</Relationships>'
 )
 
 _CONTENT_TYPE = {
@@ -42,6 +46,7 @@ _CONTENT_TYPE = {
     "footer": "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
     "footnotes": "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
     "endnotes": "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+    "comments": "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
 }
 
 
@@ -138,6 +143,41 @@ def bookmark_start(bid: str, name: str = "bm") -> str:
 
 def bookmark_end(bid: str) -> str:
     return f'<w:bookmarkEnd w:id="{bid}"/>'
+
+
+def inserted(*children: str, author: str = "Editor") -> str:
+    """Wrap runs in a tracked insertion."""
+    return (
+        f'<w:ins w:id="90" w:author="{author}" w:date="2026-01-01T00:00:00Z">'
+        f'{"".join(children)}</w:ins>'
+    )
+
+
+def deleted(text: str, author: str = "Editor") -> str:
+    """A tracked deletion — its text lives in w:delText, not w:t."""
+    return (
+        f'<w:del w:id="91" w:author="{author}" w:date="2026-01-01T00:00:00Z">'
+        f'<w:r><w:delText xml:space="preserve">{escape(text)}</w:delText></w:r></w:del>'
+    )
+
+
+def comment_anchor(comment_id: str = "1") -> str:
+    """Comment range markers plus the reference run, around nothing."""
+    return (
+        f'<w:commentRangeStart w:id="{comment_id}"/>'
+        f'<w:commentRangeEnd w:id="{comment_id}"/>'
+        f'<w:r><w:commentReference w:id="{comment_id}"/></w:r>'
+    )
+
+
+def comments(*bodies: str) -> str:
+    """Build ``word/comments.xml``."""
+    entries = "".join(
+        f'<w:comment w:id="{i + 1}" w:author="Editor" w:date="2026-01-01T00:00:00Z">'
+        f'{body}</w:comment>'
+        for i, body in enumerate(bodies)
+    )
+    return XML_HEAD + f"<w:comments {NS_DECL}>{entries}</w:comments>"
 
 
 def hyperlink(*children: str, anchor: str = "target") -> str:
