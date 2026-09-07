@@ -13,9 +13,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, ttk
 
-import yaml
-
 from detection import DetectionEngine, ContentType
+from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
 from verify import verify_clean
 
@@ -27,15 +26,17 @@ from verify import verify_clean
 CONFIG_PATH = Path(__file__).parent / "patterns.yaml"
 
 
-def load_config() -> dict:
-    with open(CONFIG_PATH, "r") as f:
-        return yaml.safe_load(f)
+def build_engine() -> DetectionEngine:
+    """Load patterns.yaml and build the detection engine.
+
+    Raises FileNotFoundError or ValueError with a readable message if the
+    configuration is missing, empty, malformed, or holds an invalid regex.
+    """
+    return DetectionEngine(load_config(CONFIG_PATH))
 
 
-def _preview_one(input_path: Path, log) -> bool:
+def _preview_one(input_path: Path, engine: DetectionEngine, log) -> bool:
     """Run a dry-run preview on a single file and log detections."""
-    config = load_config()
-    engine = DetectionEngine(config)
     processor = DocxProcessor(engine, verbose=False, dry_run=True)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="speccleanse_preview_"))
@@ -84,10 +85,8 @@ def _preview_one(input_path: Path, log) -> bool:
             shutil.rmtree(temp_dir)
 
 
-def _clean_one(input_path: Path, output_path: Path, log) -> bool:
+def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log) -> bool:
     """Run single-pass content removal on a single file."""
-    config = load_config()
-    engine = DetectionEngine(config)
     processor = DocxProcessor(engine, verbose=False)
 
     try:
@@ -325,9 +324,9 @@ class SpecCleanseGUI:
             self.output_dir = Path(d)
             self.lbl_outdir.configure(text=str(self.output_dir))
 
-    def _output_for(self, input_path: Path) -> Path:
+    def _output_for(self, input_path: Path, output_dir: Path | None = None) -> Path:
         stem = input_path.stem + "_cleaned"
-        parent = self.output_dir if self.output_dir else input_path.parent
+        parent = output_dir if output_dir else input_path.parent
         return parent / (stem + ".docx")
 
     def _log(self, text: str):
@@ -346,17 +345,28 @@ class SpecCleanseGUI:
 
     def _disable_controls(self):
         self._running = True
-        self.btn_preview.configure(state="disabled")
-        self.btn_clean.configure(state="disabled")
-        self.btn_add.configure(state="disabled")
-        self.btn_clear.configure(state="disabled")
+        for button in self._run_controls():
+            button.configure(state="disabled")
 
     def _enable_controls(self):
         self._running = False
-        self.btn_preview.configure(state="normal")
-        self.btn_clean.configure(state="normal")
-        self.btn_add.configure(state="normal")
-        self.btn_clear.configure(state="normal")
+        for button in self._run_controls():
+            button.configure(state="normal")
+
+    def _run_controls(self) -> list[tk.Button]:
+        """Buttons that must not be usable while a run is in flight.
+
+        The output folder is included: the worker reads the destination once
+        at start, so leaving the button live let a mid-run change appear to
+        redirect files that were already on their way somewhere else.
+        """
+        return [
+            self.btn_preview,
+            self.btn_clean,
+            self.btn_add,
+            self.btn_clear,
+            self.btn_outdir,
+        ]
 
     def _clear_log(self):
         self.log_text.configure(state="normal")
@@ -385,65 +395,104 @@ class SpecCleanseGUI:
         self._clear_log()
         threading.Thread(target=self._run_preview, daemon=True).start()
 
+    def _load_engine(self) -> DetectionEngine | None:
+        """Build the detection engine once per run, reporting config errors.
+
+        Configuration problems used to surface as a stderr traceback — invisible
+        under pythonw.exe — while the buttons stayed disabled forever.
+        """
+        try:
+            return build_engine()
+        except Exception as exc:
+            self._log(f"Configuration error in {CONFIG_PATH.name}: {exc}")
+            self._log("Fix the file and try again — nothing was processed.")
+            self._set_status("Configuration error")
+            return None
+
     def _run_preview(self):
-        total = len(self.files)
-        successes = 0
-        failures = 0
+        try:
+            files = list(self.files)
+            engine = self._load_engine()
+            if engine is None:
+                return
 
-        for i, fpath in enumerate(self.files, 1):
-            self._set_status(f"Previewing {i}/{total}: {fpath.name}")
-            self._set_progress((i - 1) / total * 100)
-            self._log(f"[{i}/{total}] {fpath.name} — Preview")
+            total = len(files)
+            successes = 0
+            failures = 0
 
-            ok = _preview_one(fpath, self._log)
-            if ok:
-                successes += 1
-            else:
-                failures += 1
+            for i, fpath in enumerate(files, 1):
+                self._set_status(f"Previewing {i}/{total}: {fpath.name}")
+                self._set_progress((i - 1) / total * 100)
+                self._log(f"[{i}/{total}] {fpath.name} — Preview")
 
-            self._log("")
+                ok = _preview_one(fpath, engine, self._log)
+                if ok:
+                    successes += 1
+                else:
+                    failures += 1
 
-        self._set_progress(100)
+                self._log("")
 
-        summary = f"Preview done: {successes} succeeded"
-        if failures:
-            summary += f", {failures} failed"
-        self._set_status(summary)
-        self._log("=" * 50)
-        self._log(summary)
+            self._set_progress(100)
 
-        self.root.after(0, self._enable_controls)
+            summary = f"Preview done: {successes} succeeded"
+            if failures:
+                summary += f", {failures} failed"
+            self._set_status(summary)
+            self._log("=" * 50)
+            self._log(summary)
+
+        except Exception as exc:
+            self._log(f"Preview stopped: {exc}")
+            self._set_status("Preview stopped — see log")
+
+        finally:
+            self.root.after(0, self._enable_controls)
 
     def _run_clean(self):
-        total = len(self.files)
-        successes = 0
-        failures = 0
+        try:
+            # Snapshot the inputs: both are settable from the UI, and the run
+            # should finish against the selection it started with.
+            files = list(self.files)
+            output_dir = self.output_dir
+            engine = self._load_engine()
+            if engine is None:
+                return
 
-        for i, fpath in enumerate(self.files, 1):
-            self._set_status(f"Cleaning {i}/{total}: {fpath.name}")
-            self._set_progress((i - 1) / total * 100)
-            self._log(f"[{i}/{total}] {fpath.name}")
+            total = len(files)
+            successes = 0
+            failures = 0
 
-            out = self._output_for(fpath)
-            ok = _clean_one(fpath, out, self._log)
-            if ok:
-                successes += 1
-                self._log(f"  -> {out.name}")
-            else:
-                failures += 1
+            for i, fpath in enumerate(files, 1):
+                self._set_status(f"Cleaning {i}/{total}: {fpath.name}")
+                self._set_progress((i - 1) / total * 100)
+                self._log(f"[{i}/{total}] {fpath.name}")
 
-            self._log("")
+                out = self._output_for(fpath, output_dir)
+                ok = _clean_one(fpath, out, engine, self._log)
+                if ok:
+                    successes += 1
+                    self._log(f"  -> {out.name}")
+                else:
+                    failures += 1
 
-        self._set_progress(100)
+                self._log("")
 
-        summary = f"Done: {successes} succeeded"
-        if failures:
-            summary += f", {failures} failed"
-        self._set_status(summary)
-        self._log("=" * 50)
-        self._log(summary)
+            self._set_progress(100)
 
-        self.root.after(0, self._enable_controls)
+            summary = f"Done: {successes} succeeded"
+            if failures:
+                summary += f", {failures} failed"
+            self._set_status(summary)
+            self._log("=" * 50)
+            self._log(summary)
+
+        except Exception as exc:
+            self._log(f"Clean stopped: {exc}")
+            self._set_status("Clean stopped — see log")
+
+        finally:
+            self.root.after(0, self._enable_controls)
 
 
 def main():

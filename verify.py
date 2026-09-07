@@ -19,12 +19,9 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import yaml
 from lxml import etree
 
-# Word namespace
-W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-W = f"{{{W_NS}}}"
+from docx_xml import W, W_NS, collect_content_parts, load_config, parse_xml
 
 
 # =============================================================================
@@ -108,28 +105,6 @@ class VerificationResult:
 # Text extraction
 # =============================================================================
 
-def _collect_xml_files(word_dir: Path) -> list[Path]:
-    """Return document.xml, headers, footers, footnotes, and endnotes
-    in a stable order.
-
-    The deep-clean stage (RSID stripping in particular) processes *all*
-    XML files via ``rglob('*.xml')``, so the verification step must
-    also cover footnotes and endnotes to catch any accidental content
-    loss there.
-    """
-    xml_files: list[Path] = []
-    doc_xml = word_dir / "document.xml"
-    if doc_xml.exists():
-        xml_files.append(doc_xml)
-    xml_files.extend(sorted(word_dir.glob("header*.xml")))
-    xml_files.extend(sorted(word_dir.glob("footer*.xml")))
-    for extra in ("footnotes.xml", "endnotes.xml"):
-        p = word_dir / extra
-        if p.exists():
-            xml_files.append(p)
-    return xml_files
-
-
 def extract_text(docx_path: Path) -> list[str]:
     """Extract paragraph-level text from a DOCX file.
 
@@ -142,10 +117,8 @@ def extract_text(docx_path: Path) -> list[str]:
             zf.extractall(temp_dir)
 
         paragraphs: list[str] = []
-        for xml_path in _collect_xml_files(temp_dir / "word"):
-            parser = etree.XMLParser(remove_blank_text=False)
-            tree = etree.parse(str(xml_path), parser)
-            root = tree.getroot()
+        for xml_path in collect_content_parts(temp_dir / "word"):
+            root = parse_xml(xml_path).getroot()
 
             for para in root.iter(f"{W}p"):
                 texts: list[str] = []
@@ -189,10 +162,8 @@ def _extract_paragraphs_with_formatting(
 
         paragraphs: list[ParagraphInfo] = []
 
-        for xml_path in _collect_xml_files(temp_dir / "word"):
-            parser = etree.XMLParser(remove_blank_text=False)
-            tree = etree.parse(str(xml_path), parser)
-            root = tree.getroot()
+        for xml_path in collect_content_parts(temp_dir / "word"):
+            root = parse_xml(xml_path).getroot()
 
             for para in root.iter(f"{W}p"):
                 texts: list[str] = []
@@ -350,8 +321,7 @@ def verify_clean(
     """
     if config_path is None:
         config_path = Path(__file__).parent / "patterns.yaml"
-    with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+    config = load_config(config_path)
 
     # Rich extraction for input (text + formatting metadata)
     input_paras = _extract_paragraphs_with_formatting(input_path, config)

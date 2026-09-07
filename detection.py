@@ -11,9 +11,7 @@ from enum import Enum
 from typing import Optional
 from lxml import etree
 
-# Word namespace
-W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-W = f"{{{W_NS}}}"
+from docx_xml import W, W_NS, compile_patterns, toggle_on
 
 
 class ContentType(Enum):
@@ -41,12 +39,17 @@ class Detection:
         return f"Detection({self.content_type.value}, '{preview}', conf={self.confidence:.2f})"
 
 
-@dataclass 
+@dataclass
 class PatternConfig:
-    """Configuration for a pattern-based detector."""
+    """Configuration for a pattern-based detector.
+
+    Patterns arrive already compiled: every regex in ``patterns.yaml`` is
+    compiled when the engine is built, so a bad pattern surfaces once, with
+    its section and index, instead of once per file as "Processing error".
+    """
     enabled: bool = True
-    text_patterns: list[str] = field(default_factory=list)
-    low_confidence_patterns: list[str] = field(default_factory=list)
+    text_patterns: list[re.Pattern] = field(default_factory=list)
+    low_confidence_patterns: list[re.Pattern] = field(default_factory=list)
     formatting_signals: dict = field(default_factory=dict)
     style_names: list[str] = field(default_factory=list)
 
@@ -58,29 +61,9 @@ class BaseDetector:
     
     def __init__(self, config: PatternConfig):
         self.config = config
-        self._compiled_patterns = None
-        self._compiled_low_confidence_patterns = None
-    
-    @property
-    def compiled_patterns(self) -> list[re.Pattern]:
-        """Lazily compile regex patterns."""
-        if self._compiled_patterns is None:
-            self._compiled_patterns = [
-                re.compile(p, re.IGNORECASE | re.DOTALL) 
-                for p in self.config.text_patterns
-            ]
-        return self._compiled_patterns
+        self.compiled_patterns = config.text_patterns
+        self.compiled_low_confidence_patterns = config.low_confidence_patterns
 
-    @property
-    def compiled_low_confidence_patterns(self) -> list[re.Pattern]:
-        """Lazily compile low-confidence regex patterns."""
-        if self._compiled_low_confidence_patterns is None:
-            self._compiled_low_confidence_patterns = [
-                re.compile(p, re.IGNORECASE | re.DOTALL)
-                for p in self.config.low_confidence_patterns
-            ]
-        return self._compiled_low_confidence_patterns
-    
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
         """
         Detect if element should be removed.
@@ -102,19 +85,15 @@ class BaseDetector:
         rpr = run.find(f"{W}rPr")
         if rpr is None:
             return formatting
+
+        # Toggle properties are on when present without w:val, and OFF when
+        # w:val is 0/false/off.  Word writes <w:vanish w:val="0"/> to un-hide
+        # a run that inherits hidden from its style, so presence is not truth.
+        formatting["italic"] = toggle_on(rpr, f"{W}i")
+        formatting["bold"] = toggle_on(rpr, f"{W}b")
+        formatting["hidden"] = toggle_on(rpr, f"{W}vanish")
+
         
-        # Check italic
-        if rpr.find(f"{W}i") is not None:
-            formatting["italic"] = True
-        
-        # Check bold
-        if rpr.find(f"{W}b") is not None:
-            formatting["bold"] = True
-            
-        # Check hidden (vanish)
-        if rpr.find(f"{W}vanish") is not None:
-            formatting["hidden"] = True
-            
         # Check color
         color_elem = rpr.find(f"{W}color")
         if color_elem is not None:
@@ -245,9 +224,12 @@ class HiddenTextDetector(BaseDetector):
     content_type = ContentType.HIDDEN_TEXT
     
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
-        if not self.config.enabled:
+        if not self.config.enabled or not text.strip():
+            # A run with no text carries structure, not content: a field
+            # character, a footnote reference, a picture.  Removing it because
+            # the run happens to be marked hidden breaks whatever it anchors.
             return None
-        
+
         # Check for vanish property in run
         if element.tag == f"{W}r":
             formatting = self._get_run_formatting(element)
@@ -382,19 +364,31 @@ class DetectionEngine:
     """
     
     def __init__(self, config: dict):
-        """Initialize with configuration dictionary (from YAML)."""
+        """Initialize with configuration dictionary (from YAML).
+
+        Every regex in the configuration is compiled here, so an invalid
+        pattern raises ``ValueError`` naming its section and index once, at
+        startup, rather than failing every document with "Processing error".
+        """
         self.config = config
         self.detectors = self._create_detectors()
         self.preserve_detector = PreserveDetector(
-            self._make_pattern_config(config.get("preserve_patterns", {}))
+            self._make_pattern_config(
+                config.get("preserve_patterns", {}), "preserve_patterns"
+            )
         )
-    
-    def _make_pattern_config(self, section: dict) -> PatternConfig:
-        """Create PatternConfig from config section."""
+
+    def _make_pattern_config(self, section: dict, section_name: str) -> PatternConfig:
+        """Create PatternConfig from config section, compiling its patterns."""
         return PatternConfig(
             enabled=section.get("enabled", True),
-            text_patterns=section.get("text_patterns", []),
-            low_confidence_patterns=section.get("low_confidence_patterns", []),
+            text_patterns=compile_patterns(
+                section.get("text_patterns", []), f"{section_name}.text_patterns"
+            ),
+            low_confidence_patterns=compile_patterns(
+                section.get("low_confidence_patterns", []),
+                f"{section_name}.low_confidence_patterns",
+            ),
             formatting_signals=section.get("formatting_signals", {}),
             style_names=(
                 section.get("paragraph_styles", []) + 
@@ -420,7 +414,7 @@ class DetectionEngine:
         
         for section_name, detector_class in detector_map.items():
             section = self.config.get(section_name, {})
-            config = self._make_pattern_config(section)
+            config = self._make_pattern_config(section, section_name)
             
             # Add style names for detectors that use editorial style signals.
             if section_name in {"specifier_notes", "editorial_artifacts"}:
