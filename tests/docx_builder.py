@@ -8,6 +8,7 @@ shipping binary fixtures or adding a dependency.
 
 import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
@@ -73,7 +74,7 @@ def run(
         f'<w:rStyle w:val="{rstyle}"/>' if rstyle else "",
     ])
     rpr = f"<w:rPr>{props}</w:rPr>" if props else ""
-    body = f"<w:t xml:space=\"preserve\">{text}</w:t>" if text else ""
+    body = f"<w:t xml:space=\"preserve\">{escape(text)}</w:t>" if text else ""
     return f"<w:r>{rpr}{body}{inner}</w:r>"
 
 

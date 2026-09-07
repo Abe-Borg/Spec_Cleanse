@@ -1,5 +1,12 @@
 # SpecCleanse Detection Patterns Configuration
-# Each pattern set can be enabled/disabled and customized
+#
+# This file is UTF-8 and contains ©, – and —.  It is always read as UTF-8
+# (see docx_xml.load_config); keep it that way when editing on Windows.
+#
+# Each pattern set can be enabled/disabled and customized.  Every value under
+# a `description:` key is documentation for the reader — nothing in the code
+# reads it.  Regular expressions are compiled case-insensitively with DOTALL,
+# so `^` anchors to the start of a paragraph, not of every line.
 
 specifier_notes:
   enabled: true
@@ -15,33 +22,32 @@ specifier_notes:
     - '\[coordinator.*?note.*?\]'       # [Coordinator Note]
     - '<specifier.*?>'                  # <Specifier Note>
     - '^\s*\*\*\*.*?\*\*\*\s*$'         # *** specifier notes ***
-    - '\[verify\s+.*?\]'                # [Verify ...] instructions
-    - '\[coordinate\s+.*?\]'            # [Coordinate ...] instructions
-    - '\[confirm\s+.*?\]'               # [Confirm ...] instructions
-    
+
+  # Remove text that carries editorial formatting (italic plus an editorial
+  # colour) even when no pattern matches it.  Some firms mark their notes
+  # only that way, so this is on by default — but real specification content
+  # can also be red and italic, so turn it off if it starts eating content.
+  # Such removals are labelled "formatting-only" in the Preview report.
+  formatting_only_removal: true
+
   # Formatting indicators (if text has these, increase confidence)
   formatting_signals:
-    italic: true
     colors:
       - "FF0000"  # Red
       - "C00000"  # Dark red
       - "0000FF"  # Blue
       - "0070C0"  # Light blue
-    highlight_colors:
-      - "yellow"
-      - "cyan"
 
 copyright_notices:
   enabled: true
   description: "Boilerplate copyright text"
 
   text_patterns:
-    - '©'
+    - '©\s*\d{4}'                       # © 2026 — not a bare © (e.g. "Excel© file")
+    - 'copyright\s*©'
     - 'copyright\s+\d{4}'
-    - 'copyright\s+©'
     - 'all\s+rights\s+reserved'
     - 'may\s+not\s+be\s+reproduced'
-    - 'proprietary\s+information'
     - 'licensed\s+for\s+use\s+by'
     - 'duplication.*?prohibited'
     - 'unauthorized.*?reproduction'
@@ -49,36 +55,29 @@ copyright_notices:
 
 hidden_text:
   enabled: true
-  description: "Content marked as hidden in Word"
-  
-  # This is detected via XML property, not pattern
-  xml_property: "w:vanish"
+  description: "Content marked as hidden in Word (w:vanish), detected from the
+    XML rather than from any pattern"
 
 specagent_references:
   enabled: true
   description: "SpecAgent.com watermarks and references"
   
   text_patterns:
-    - 'specagent\.com'
-    - 'specagent'
-    - 'spec\s*agent'
-    - 'www\.specagent'
-    - 'produced\s+by\s+specagent'
-    - 'generated\s+by\s+specagent'
+    - 'spec\s*agent'                    # covers specagent.com, www.specagent, etc.
 
 editorial_artifacts:
   enabled: true
   description: "Placeholder instructions and editing artifacts"
 
-  # ── Two-tier confidence system ──────────────────────────────────────
+  # ── Three tiers ─────────────────────────────────────────────────────
   #
-  # text_patterns (high-confidence):
+  # text_patterns (high-confidence, whole paragraph):
   #   Matched content gets confidence 0.8 — above the 0.5 removal
-  #   threshold on text match alone.  Use this tier for patterns that
-  #   are unambiguously editorial: bracketed placeholders, explicit
-  #   retain/delete instructions, delimited markers.
+  #   threshold on text match alone, and the whole paragraph goes.  Use
+  #   this tier only for paragraphs that are editorial from end to end:
+  #   standalone retain/delete instructions and delimited markers.
   #
-  # low_confidence_patterns:
+  # low_confidence_patterns (whole paragraph, needs formatting):
   #   Matched content starts at confidence 0.3 — below the removal
   #   threshold.  It will ONLY be removed if editorial formatting
   #   signals push it past 0.5:
@@ -89,44 +88,37 @@ editorial_artifacts:
   #   Use this tier for bare-prose patterns that could plausibly
   #   appear in real specification content (e.g., "revise as required",
   #   "coordinate specifications for").
+  #
+  # inline_patterns (cut out of the paragraph, paragraph kept):
+  #   Placeholders that sit *inside* real requirement text.  MasterSpec
+  #   writes "Provide two [Verify quantity with Owner] spare filters per
+  #   unit."; deleting that paragraph deletes a requirement.  These
+  #   matches are cut out where they stand and the sentence around them
+  #   survives.  A paragraph left with nothing but placeholders is
+  #   removed in full.
   # ────────────────────────────────────────────────────────────────────
 
-  # High-confidence patterns — safe to remove on text match alone.
+  # High-confidence patterns — safe to remove the whole paragraph on text match.
   text_patterns:
     # Retain/delete instructions
     - 'retain\s+or\s+delete'
     - 'delete\s+if\s+not\s+(applicable|required|used)'
     - 'retain\s+if\s+(applicable|required|used)'
-    - 'select\s+one'
-    - 'choose\s+one'
+    - '^\s*(?:select|choose)\s+one\b(?!-)'   # anchored; not "Select one-piece fittings"
     - 'delete\s+options?\s+not\s+(applicable|required|selected)'
-    
-    # Insert placeholders
-    - '<insert\s*.*?>'
-    - '\[insert\s*.*?\]'
-    - '\{insert\s*.*?\}'
-    - '<enter\s*.*?>'
-    - '\[enter\s*.*?\]'
-    
-    # Empty placeholders
-    - '\[\s*\]'                         # Empty brackets
-    - '<\s*>'                           # Empty angle brackets
-    - '\[_+\]'                          # [___]
-    - '<_+>'                            # <___>
-    - '\[\.\.+\]'                       # [...]
-    
+
     # Common editing instructions
     - 'delete\s+this\s+(paragraph|section|line)'
     - 'remove\s+this\s+(paragraph|section|line)'
-    - '\[tbd\]'
-    - '\[n/a\]'
-    - '\[pending\]'
 
-    # MasterSpec / ARCOM editorial instructions
-    - 'retain\s+.*?(paragraph|subparagraph)\s*(below|above)?'
-    - 'copy\s+.*?(paragraph|subparagraph)\s*(below|above)?'
+    # MasterSpec / ARCOM editorial instructions.  Anchored to the start of the
+    # paragraph and required to point somewhere ("above"/"below") within the
+    # same sentence, so they cannot fire on real requirements such as "Retain
+    # records of all tests required in Paragraph 1.6."
+    - '^\s*retain\s+(?:\w+\s+){0,4}(?:sub)?paragraphs?\b[^.]{0,60}\b(?:above|below)\b'
+    - '^\s*copy\s+(?:\w+\s+){0,4}(?:sub)?paragraphs?\b[^.]{0,60}\b(?:above|below)\b'
     - 'see\s+(evaluations|editing\s+instruction)'
-    
+
     # Section markers that aren't content
     - '---+\s*optional\s*---+'
     - '===+\s*optional\s*===+'
@@ -147,6 +139,28 @@ editorial_artifacts:
     - 'this\s+section\s+uses\s+the\s+term'
     - 'coordinate\s+specifications\s+for'
 
+  # Inline placeholders — cut out in place, the paragraph around them stays.
+  inline_patterns:
+    # Fill-in instructions
+    - '<insert\s*[^<>]*?>'
+    - '\[insert\s*[^\[\]]*?\]'
+    - '\{insert\s*[^{}]*?\}'
+    - '<enter\s*[^<>]*?>'
+    - '\[enter\s*[^\[\]]*?\]'
+    - '\[verify\s*[^\[\]]*?\]'
+    - '\[confirm\s*[^\[\]]*?\]'
+    - '\[coordinate\s*[^\[\]]*?\]'
+
+    # Empty placeholders
+    - '\[\s*\]'                         # Empty brackets
+    - '<\s*>'                           # Empty angle brackets
+    - '\[_+\]'                          # [___]
+    - '<_+>'                            # <___>
+    - '\[\.\.+\]'                       # [...]
+    - '\[tbd\]'
+    - '\[n/a\]'
+    - '\[pending\]'
+
 # Content that should NEVER be removed (whitelist)
 preserve_patterns:
   enabled: true
@@ -155,22 +169,24 @@ preserve_patterns:
   text_patterns:
     # Only protect actual section/part headings at start of line
     - '^\s*end\s+of\s+section'
-    - '^\s*section\s+\d{4,}'          # Section headings like "SECTION 238126"
-    - '^\s*part\s+\d+\s*[-–—:]'       # Part headings like "PART 1 - GENERAL"
-    - '^\s*article\s+\d+\s*[-–—:]'    # Article headings
+    - '^\s*section\s+\d{2}\s?\d{2}\s?\d{2}'  # MasterFormat: "SECTION 23 05 00"
+    - '^\s*section\s+\d{4,}'                 # Older numbering: "SECTION 238126"
+    - '^\s*part\s+\d+\b'                     # Part headings: "PART 1 - GENERAL"
+    - '^\s*article\s+\d+\s*[-–—:]'           # Article headings
 
 # Advanced: Style-based detection
 style_based_detection:
   enabled: true
-  description: "Detect content based on paragraph/character style names"
+  description: "Detect content based on paragraph/character style names.
+    Names are matched against the style ID and against the display name in
+    word/styles.xml, and styles that inherit from one of these are matched
+    too, so 'Specifier Note' and 'SpecifierNote' both work."
   
   # Paragraph styles that indicate specifier content
   paragraph_styles:
     - "CMT"
     - "SpecifierNote"
-    - "Specifier Note"
     - "EditorNote"
-    - "Editor Note"
     - "EditorialNote"
     - "NotetoSpecifier"
     - "CoordinatorNote"
@@ -178,6 +194,5 @@ style_based_detection:
   # Character styles that indicate specifier content  
   character_styles:
     - "SpecifierNote"
-    - "Specifier Note"
     - "EditorNote"
     - "Hidden"

@@ -295,6 +295,46 @@ def set_text(node: etree._Element, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Character spans
+# ---------------------------------------------------------------------------
+
+def merge_spans(spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Sort and coalesce overlapping/adjacent ``(start, end)`` ranges."""
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def tidy_spans(text: str, spans: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """Widen each span by one trailing space when it sits between two spaces.
+
+    Cutting "[Verify quantity]" out of "two [Verify quantity] spare filters"
+    would otherwise leave a double space where the placeholder used to be.
+    """
+    tidied: list[tuple[int, int]] = []
+    for start, end in spans:
+        if start > 0 and text[start - 1] == " " and end < len(text) and text[end] == " ":
+            end += 1
+        tidied.append((start, end))
+    return merge_spans(tidied)
+
+
+def cut_spans(text: str, spans: list[tuple[int, int]]) -> str:
+    """Return ``text`` with every span removed."""
+    kept: list[str] = []
+    cursor = 0
+    for start, end in merge_spans(spans):
+        kept.append(text[cursor:start])
+        cursor = max(cursor, end)
+    kept.append(text[cursor:])
+    return "".join(kept)
+
+
+# ---------------------------------------------------------------------------
 # Structure inspection
 # ---------------------------------------------------------------------------
 

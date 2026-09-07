@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Optional
 from lxml import etree
 
-from docx_xml import W, W_NS, compile_patterns, toggle_on
+from docx_xml import W, W_NS, compile_patterns, merge_spans, toggle_on
 
 
 class ContentType(Enum):
@@ -21,6 +21,7 @@ class ContentType(Enum):
     HIDDEN_TEXT = "hidden_text"
     SPECAGENT = "specagent"
     EDITORIAL_ARTIFACT = "editorial_artifact"
+    INLINE_PLACEHOLDER = "inline_placeholder"  # Cut from the paragraph, not with it
     PRESERVE = "preserve"  # Content that should NOT be removed
 
 
@@ -33,6 +34,8 @@ class Detection:
     confidence: float  # 0.0 to 1.0
     reason: str
     parent_paragraph: Optional[etree._Element] = None
+    spans: list[tuple[int, int]] = field(default_factory=list)
+    formatting_only: bool = False  # crossed the threshold on formatting alone
     
     def __repr__(self):
         preview = self.text[:50] + "..." if len(self.text) > 50 else self.text
@@ -50,8 +53,10 @@ class PatternConfig:
     enabled: bool = True
     text_patterns: list[re.Pattern] = field(default_factory=list)
     low_confidence_patterns: list[re.Pattern] = field(default_factory=list)
+    inline_patterns: list[re.Pattern] = field(default_factory=list)
     formatting_signals: dict = field(default_factory=dict)
     style_names: list[str] = field(default_factory=list)
+    formatting_only_removal: bool = True
 
 
 class BaseDetector:
@@ -130,14 +135,21 @@ class SpecifierNoteDetector(BaseDetector):
     def detect(self, element: etree._Element, text: str) -> Optional[Detection]:
         if not self.config.enabled or not text.strip():
             return None
-            
-        confidence = 0.0
+
+        # Evidence is scored in two buckets.  "Content" evidence — a text
+        # pattern or an editorial style — says what the text *is*.  Formatting
+        # evidence — italic, editorial colour — only says how it looks, and
+        # italic + colour alone lands on exactly 0.5, the removal threshold.
+        # Firms whose notes are marked only that way need it; firms whose real
+        # spec text is red and italic do not, hence the switch.
+        content_score = 0.0
+        formatting_score = 0.0
         reasons = []
-        
+
         # Check text patterns
         for pattern in self.compiled_patterns:
             if pattern.search(text):
-                confidence += 0.6
+                content_score += 0.6
                 reasons.append(f"Pattern match: {pattern.pattern}")
                 break
         
@@ -147,19 +159,19 @@ class SpecifierNoteDetector(BaseDetector):
             
             # Italic text with color is a strong signal
             if formatting["italic"]:
-                confidence += 0.2
+                formatting_score += 0.2
                 reasons.append("Italic text")
                 
             # Red/blue text is a strong signal
             fmt_colors = self.config.formatting_signals.get("colors", [])
             if formatting["color"] and formatting["color"].upper() in [c.upper() for c in fmt_colors]:
-                confidence += 0.3
+                formatting_score += 0.3
                 reasons.append(f"Color: {formatting['color']}")
                 
             # Check character style
             style_names = self.config.style_names or []
             if formatting["style"] and formatting["style"] in style_names:
-                confidence += 0.8
+                content_score += 0.8
                 reasons.append(f"Style: {formatting['style']}")
         
         # Check paragraph style
@@ -167,16 +179,24 @@ class SpecifierNoteDetector(BaseDetector):
             para_style = self._get_paragraph_style(element)
             style_names = self.config.style_names or []
             if para_style and para_style in style_names:
-                confidence += 0.8
+                content_score += 0.8
                 reasons.append(f"Paragraph style: {para_style}")
-        
+
+        if content_score == 0.0 and not self.config.formatting_only_removal:
+            return None
+
+        confidence = content_score + formatting_score
         if confidence >= 0.5:
+            formatting_only = content_score == 0.0
+            if formatting_only:
+                reasons.append("formatting-only")
             return Detection(
                 content_type=self.content_type,
                 element=element,
                 text=text,
                 confidence=min(confidence, 1.0),
-                reason="; ".join(reasons)
+                reason="; ".join(reasons),
+                formatting_only=formatting_only,
             )
         
         return None
@@ -191,21 +211,18 @@ class CopyrightDetector(BaseDetector):
         if not self.config.enabled or not text.strip():
             return None
         
-        confidence = 0.0
-        reasons = []
-        
-        # Check patterns
-        for pattern in self.compiled_patterns:
-            if pattern.search(text):
-                confidence += 0.7
-                reasons.append(f"Pattern match: {pattern.pattern}")
-        
-        # Multiple copyright indicators = high confidence
-        matches = sum(1 for p in self.compiled_patterns if p.search(text))
-        if matches >= 2:
-            confidence += 0.2
-            reasons.append(f"Multiple indicators: {matches}")
-        
+        reasons = [
+            f"Pattern match: {pattern.pattern}"
+            for pattern in self.compiled_patterns
+            if pattern.search(text)
+        ]
+        if not reasons:
+            return None
+
+        confidence = 0.7 * len(reasons)
+        if len(reasons) >= 2:
+            reasons.append(f"Multiple indicators: {len(reasons)}")
+
         if confidence >= 0.5:
             return Detection(
                 content_type=self.content_type,
@@ -298,7 +315,7 @@ class EditorialArtifactDetector(BaseDetector):
                 break
 
         if matched_low_confidence_pattern is None:
-            return None
+            return self._detect_inline(element, text)
 
         style_names = self.config.style_names or []
         fmt_colors = [
@@ -333,7 +350,42 @@ class EditorialArtifactDetector(BaseDetector):
                 reason="; ".join(reasons),
             )
 
-        return None
+        return self._detect_inline(element, text)
+
+    def _detect_inline(
+        self, element: etree._Element, text: str
+    ) -> Optional[Detection]:
+        """Find placeholders sitting inside otherwise real requirement text.
+
+        MasterSpec writes "Provide two [Verify quantity with Owner] spare
+        filters per unit."  Removing that paragraph removes a requirement, so
+        these matches are reported as character spans and cut out where they
+        stand; only a paragraph left with nothing but placeholders is removed
+        in full.  Spans are paragraph-relative, so run-level elements are not
+        examined here.
+        """
+        if element.tag != f"{W}p" or not self.config.inline_patterns:
+            return None
+
+        spans: list[tuple[int, int]] = []
+        matched: list[str] = []
+        for pattern in self.config.inline_patterns:
+            for match in pattern.finditer(text):
+                if match.end() > match.start():
+                    spans.append((match.start(), match.end()))
+                    matched.append(pattern.pattern)
+
+        if not spans:
+            return None
+
+        return Detection(
+            content_type=ContentType.INLINE_PLACEHOLDER,
+            element=element,
+            text=text,
+            confidence=0.8,
+            reason="Inline placeholder: " + "; ".join(dict.fromkeys(matched)),
+            spans=merge_spans(spans),
+        )
 
 
 class PreserveDetector(BaseDetector):
@@ -389,11 +441,15 @@ class DetectionEngine:
                 section.get("low_confidence_patterns", []),
                 f"{section_name}.low_confidence_patterns",
             ),
+            inline_patterns=compile_patterns(
+                section.get("inline_patterns", []), f"{section_name}.inline_patterns"
+            ),
             formatting_signals=section.get("formatting_signals", {}),
             style_names=(
                 section.get("paragraph_styles", []) + 
                 section.get("character_styles", [])
-            )
+            ),
+            formatting_only_removal=section.get("formatting_only_removal", True),
         )
     
     def _create_detectors(self) -> list[BaseDetector]:
@@ -411,6 +467,7 @@ class DetectionEngine:
         
         # Add style-based config to specifier notes
         style_config = self.config.get("style_based_detection", {})
+        style_detection_enabled = style_config.get("enabled", True)
         
         for section_name, detector_class in detector_map.items():
             section = self.config.get(section_name, {})
@@ -419,8 +476,9 @@ class DetectionEngine:
             # Add style names for detectors that use editorial style signals.
             if section_name in {"specifier_notes", "editorial_artifacts"}:
                 config.style_names = (
-                    style_config.get("paragraph_styles", []) +
-                    style_config.get("character_styles", [])
+                    (style_config.get("paragraph_styles", []) +
+                     style_config.get("character_styles", []))
+                    if style_detection_enabled else []
                 )
             if section_name == "editorial_artifacts":
                 specifier_fmt = self.config.get("specifier_notes", {}).get("formatting_signals", {})
@@ -454,10 +512,43 @@ class DetectionEngine:
         """
         Determine if content should be removed based on detections.
         Returns False if any PRESERVE detection exists.
+
+        Inline placeholders never remove their element: they are cut out of
+        the text where they stand, so the sentence around them survives.
         """
         for d in detections:
             if d.content_type == ContentType.PRESERVE:
                 return False
         
         # Remove if any detection with confidence >= 0.5
-        return any(d.confidence >= 0.5 for d in detections)
+        return any(
+            d.confidence >= 0.5 and d.content_type != ContentType.INLINE_PLACEHOLDER
+            for d in detections
+        )
+
+    def removal_patterns(self) -> list[tuple[str, re.Pattern]]:
+        """Every removal pattern as ``(category, compiled)``, in detector order.
+
+        Verification classifies removals against exactly the patterns that
+        caused them, so a correct low-confidence or inline removal is never
+        reported as unexpected just because verification compiled a different
+        list from the same file.
+        """
+        patterns: list[tuple[str, re.Pattern]] = []
+        for detector in self.detectors:
+            if not detector.config.enabled:
+                continue
+            category = detector.content_type.value
+            for pattern in detector.compiled_patterns:
+                patterns.append((category, pattern))
+            for pattern in detector.compiled_low_confidence_patterns:
+                patterns.append((category, pattern))
+            for pattern in detector.config.inline_patterns:
+                patterns.append((ContentType.INLINE_PLACEHOLDER.value, pattern))
+        return patterns
+
+    def preserve_patterns(self) -> list[re.Pattern]:
+        """Compiled preserve patterns — content that must never be removed."""
+        if not self.preserve_detector.config.enabled:
+            return []
+        return self.preserve_detector.compiled_patterns

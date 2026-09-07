@@ -18,20 +18,28 @@ from detection import Detection, DetectionEngine, ContentType
 from docx_xml import (
     KEEP_ON_STRIP,
     NAMESPACES,
+    P_TAG,
+    R_TAG,
+    T_TAG,
     W,
     W_NS,
     can_delete_paragraph,
     collect_content_parts,
+    cut_spans,
     field_chars_balanced,
     has_embedded_content,
     has_section_properties,
     iter_own_runs,
     iter_paragraphs,
+    iter_text_nodes,
+    merge_spans,
     orphaned_range_markers,
     paragraph_text,
     parse_xml,
     run_text,
+    set_text,
     strip_text_leaves,
+    tidy_spans,
     write_xml,
 )
 
@@ -75,6 +83,7 @@ class ProcessingResult:
     detections: list[Detection] = field(default_factory=list)
     removed_count: int = 0
     preserved_count: int = 0
+    redacted_count: int = 0
     errors: list[str] = field(default_factory=list)
     
     @property
@@ -141,6 +150,8 @@ class DocxProcessor:
                 for d in result.detections:
                     if d.content_type == ContentType.PRESERVE:
                         result.preserved_count += 1
+                    elif d.content_type == ContentType.INLINE_PLACEHOLDER:
+                        result.redacted_count += 1
                     else:
                         result.removed_count += 1
 
@@ -183,6 +194,7 @@ class DocxProcessor:
         # mutating the tree while iterating it skips elements.
         paragraphs_to_remove: list[etree._Element] = []
         runs_to_remove: list[etree._Element] = []
+        redactions: list[tuple[etree._Element, list[tuple[int, int]]]] = []
 
         for para in iter_paragraphs(root):
             para_detections = self._process_paragraph(para)
@@ -191,6 +203,15 @@ class DocxProcessor:
             if self._should_remove_paragraph(para, para_detections):
                 paragraphs_to_remove.append(para)
                 continue
+
+            spans = self._redaction_spans(para, para_detections)
+            if spans is not None:
+                if spans:
+                    redactions.append((para, spans))
+                else:
+                    # Nothing but placeholders — the paragraph itself goes.
+                    paragraphs_to_remove.append(para)
+                    continue
 
             # Paragraph survives — remove individual detected runs
             # (e.g. hidden text runs in a mixed-content paragraph)
@@ -201,17 +222,44 @@ class DocxProcessor:
         if self.dry_run:
             return detections
 
-        # Runs first: a paragraph is either removed whole or has runs removed,
-        # never both, so the two lists never touch the same element.
+        # Redactions first: their spans are offsets into the paragraph text as
+        # it stands now.  Run removal then skips anything redaction already
+        # detached, and paragraph removal comes last.
+        for para, spans in redactions:
+            self._redact_spans(para, spans)
         for run in runs_to_remove:
             self._remove_run(run)
         for para in paragraphs_to_remove:
             self._remove_paragraph(para)
 
-        if paragraphs_to_remove or runs_to_remove:
+        if paragraphs_to_remove or runs_to_remove or redactions:
             write_xml(tree, xml_path)
 
         return detections
+
+    def _redaction_spans(
+        self, para: etree._Element, detections: list[Detection]
+    ) -> list[tuple[int, int]] | None:
+        """Character ranges to cut out of a surviving paragraph.
+
+        Returns None when there is nothing to redact, and an empty list when
+        the paragraph is nothing but placeholders — in which case the caller
+        removes the whole paragraph after all.
+        """
+        spans = [
+            span
+            for d in detections
+            if d.content_type == ContentType.INLINE_PLACEHOLDER and d.element == para
+            for span in d.spans
+        ]
+        if not spans:
+            return None
+
+        text = paragraph_text(para)
+        spans = tidy_spans(text, merge_spans(spans))
+        if not cut_spans(text, spans).strip():
+            return []
+        return spans
 
     def _group_run_detections(
         self, para: etree._Element, detections: list[Detection]
@@ -272,9 +320,11 @@ class DocxProcessor:
         if any(d.content_type == ContentType.PRESERVE for d in detections):
             return False
         
-        # Check for paragraph-level detection that meets removal threshold
+        # Check for paragraph-level detection that meets removal threshold.
+        # Inline placeholders are excluded by the engine: they are cut out of
+        # the paragraph, not carried off with it.
         para_detections = [d for d in detections if d.element == para]
-        if any(d.confidence >= 0.5 for d in para_detections):
+        if self.engine.should_remove(para_detections):
             return True
         
         # Check if all runs are detected
@@ -348,6 +398,60 @@ class DocxProcessor:
             parent.remove(run)
             if self.verbose:
                 print("  Removed run")
+
+    def _redact_spans(self, para: etree._Element, spans: list[tuple[int, int]]):
+        """Cut character ranges out of a paragraph's text, in place.
+
+        The paragraph's text nodes are walked in document order with a running
+        offset, so each span is mapped back onto the ``w:t`` it came from.
+        Runs left holding nothing are removed; runs that still carry a picture
+        or a field are kept.
+        """
+        touched_runs: list[etree._Element] = []
+        offset = 0
+
+        for node, text in list(iter_text_nodes(para)):
+            start = offset
+            offset += len(text)
+
+            if node.tag != T_TAG:
+                continue
+
+            local = [
+                (max(span_start - start, 0), min(span_end - start, len(text)))
+                for span_start, span_end in spans
+                if span_end > start and span_start < offset
+            ]
+            local = [(s, e) for s, e in local if e > s]
+            if not local:
+                continue
+
+            run = self._owning_run(node, para)
+            if run is not None:
+                touched_runs.append(run)
+
+            remaining = cut_spans(text, local)
+            if remaining:
+                set_text(node, remaining)
+            else:
+                node.getparent().remove(node)
+
+        for run in touched_runs:
+            parent = run.getparent()
+            if parent is None or has_embedded_content(run) or run_text(run):
+                continue
+            parent.remove(run)
+
+    def _owning_run(
+        self, node: etree._Element, para: etree._Element
+    ) -> Optional[etree._Element]:
+        """Return the ``w:r`` a text node belongs to, if any."""
+        parent = node.getparent()
+        while parent is not None and parent is not para:
+            if parent.tag == R_TAG:
+                return parent
+            parent = parent.getparent()
+        return None
 
     def _strip_paragraph_content(self, para: etree._Element):
         """Empty a paragraph in place, keeping properties and anchors.

@@ -35,6 +35,12 @@ def build_engine() -> DetectionEngine:
     return DetectionEngine(load_config(CONFIG_PATH))
 
 
+def _shorten(text: str, width: int = 90) -> str:
+    """One-line preview of a paragraph, trimmed to ``width`` characters."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[:width] + "..."
+
+
 def _preview_one(input_path: Path, engine: DetectionEngine, log) -> bool:
     """Run a dry-run preview on a single file and log detections."""
     processor = DocxProcessor(engine, verbose=False, dry_run=True)
@@ -53,26 +59,31 @@ def _preview_one(input_path: Path, engine: DetectionEngine, log) -> bool:
                 log(f"  ERROR: {err}")
             return False
 
-        removed = [d for d in result.detections if d.content_type != ContentType.PRESERVE]
-        preserved = [d for d in result.detections if d.content_type == ContentType.PRESERVE]
+        removed, redacted, preserved = _group_detections(result.detections)
 
-        log(f"  Would remove {len(removed)} items, preserve {len(preserved)}")
+        log(f"  Would remove {sum(len(v) for v in removed.values())} items,"
+            f" redact {len(redacted)} inline placeholder(s),"
+            f" preserve {len(preserved)}")
 
-        if removed:
-            log("\n  REMOVALS:")
-            for d in removed:
-                preview = d.text.replace("\n", " ").strip()
-                if len(preview) > 90:
-                    preview = preview[:90] + "..."
-                log(f"    [{d.content_type.value}, {d.confidence:.2f}] \"{preview}\"")
+        for category in sorted(removed):
+            detections = removed[category]
+            log(f"\n  REMOVALS — {category} ({len(detections)}):")
+            for d in detections:
+                label = f"{d.confidence:.2f}"
+                if d.formatting_only:
+                    label += ", formatting-only"
+                log(f"    [{label}] \"{_shorten(d.text)}\"")
+
+        if redacted:
+            log(f"\n  INLINE REDACTIONS ({len(redacted)}):")
+            for d in redacted:
+                cuts = ", ".join(d.text[start:end] for start, end in d.spans)
+                log(f"    cut {_shorten(cuts, 60)!r} from \"{_shorten(d.text)}\"")
 
         if preserved:
-            log("\n  PRESERVED:")
+            log(f"\n  PRESERVED ({len(preserved)}):")
             for d in preserved:
-                preview = d.text.replace("\n", " ").strip()
-                if len(preview) > 90:
-                    preview = preview[:90] + "..."
-                log(f"    [preserve, {d.confidence:.2f}] \"{preview}\"")
+                log(f"    [preserve, {d.confidence:.2f}] \"{_shorten(d.text)}\"")
 
         return True
 
@@ -83,6 +94,23 @@ def _preview_one(input_path: Path, engine: DetectionEngine, log) -> bool:
     finally:
         if temp_dir.exists():
             shutil.rmtree(temp_dir)
+
+
+def _group_detections(detections):
+    """Split detections into removals by category, redactions, and preserves."""
+    removed: dict[str, list] = {}
+    redacted = []
+    preserved = []
+
+    for d in detections:
+        if d.content_type == ContentType.PRESERVE:
+            preserved.append(d)
+        elif d.content_type == ContentType.INLINE_PLACEHOLDER:
+            redacted.append(d)
+        else:
+            removed.setdefault(d.content_type.value, []).append(d)
+
+    return removed, redacted, preserved
 
 
 def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log) -> bool:
@@ -101,9 +129,10 @@ def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log
                 log(f"  ERROR: {err}")
             return False
 
-        removed = [d for d in result.detections if d.content_type != ContentType.PRESERVE]
-        preserved = [d for d in result.detections if d.content_type == ContentType.PRESERVE]
-        log(f"    Removed {len(removed)} items, preserved {len(preserved)}")
+        removed, redacted, preserved = _group_detections(result.detections)
+        log(f"    Removed {sum(len(v) for v in removed.values())} items,"
+            f" redacted {len(redacted)} inline placeholder(s),"
+            f" preserved {len(preserved)}")
 
         original_size = input_path.stat().st_size
         final_size = output_path.stat().st_size
@@ -111,30 +140,8 @@ def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log
         pct = (saved / original_size * 100) if original_size else 0
 
         log("  Verifying no spec content was lost...")
-        vresult = verify_clean(input_path, output_path)
-        n_expected = len(vresult.expected_removals)
-        n_unexpected = len(vresult.unexpected_removals)
-        n_preserve = len(vresult.preserve_violations)
-        log(f"    Paragraphs removed: {len(vresult.removed)}"
-            f" ({n_expected} expected, {n_unexpected} unexpected"
-            f", {n_preserve} preserve violations)")
-        if vresult.passed:
-            log("    PASS — all removals match known bloat patterns")
-        else:
-            if n_preserve:
-                log(f"    FAIL — {n_preserve} preserve violation(s) "
-                    "(content that should NEVER be removed):")
-                for r in vresult.preserve_violations:
-                    preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
-                    preview = preview.replace("\n", " ")
-                    log(f"      \"{preview}\"")
-                    log(f"        matched: {r.pattern_matched}")
-            if n_unexpected:
-                log(f"    WARN — {n_unexpected} removal(s) may be real content:")
-            for r in vresult.unexpected_removals:
-                preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
-                preview = preview.replace("\n", " ")
-                log(f"      \"{preview}\"")
+        vresult = verify_clean(input_path, output_path, engine=engine)
+        _log_verification(vresult, log)
 
         log(f"  Done: {original_size:,} -> {final_size:,} bytes ({pct:.1f}% smaller)")
         return True
@@ -142,6 +149,57 @@ def _clean_one(input_path: Path, output_path: Path, engine: DetectionEngine, log
     except Exception as exc:
         log(f"  FAILED: {exc}")
         return False
+
+
+def _log_verification(vresult, log) -> None:
+    """Print the verification report: removals, modifications, structure."""
+    n_unexpected = len(vresult.unexpected_removals)
+    n_preserve = len(vresult.preserve_violations)
+
+    log(f"    Paragraphs removed: {len(vresult.removed)}"
+        f" ({len(vresult.expected_removals)} expected, {n_unexpected} unexpected"
+        f", {n_preserve} preserve violations)")
+
+    if vresult.modified:
+        log(f"    Paragraphs modified: {len(vresult.modified)}"
+            f" ({len(vresult.expected_modifications)} expected,"
+            f" {len(vresult.unexpected_modifications)} unexpected)")
+
+    if vresult.passed:
+        log("    PASS — every change matches a rule and the structure is intact")
+        return
+
+    if vresult.structural:
+        log(f"    FAIL — {len(vresult.structural)} structural problem(s) "
+            "the output has and the input did not:")
+        for violation in vresult.structural:
+            log(f"      {violation}")
+
+    if n_preserve:
+        log(f"    FAIL — {n_preserve} preserve violation(s) "
+            "(content that should NEVER be removed):")
+        for r in vresult.preserve_violations:
+            log(f"      \"{_shorten(r.text)}\"")
+            log(f"        matched: {r.pattern_matched}")
+
+    if n_unexpected:
+        log(f"    WARN — {n_unexpected} removal(s) may be real content:")
+        for r in vresult.unexpected_removals:
+            log(f"      \"{_shorten(r.text)}\"")
+
+    if vresult.unexpected_modifications:
+        log(f"    WARN — {len(vresult.unexpected_modifications)} paragraph(s) "
+            "lost text no rule accounts for:")
+        for m in vresult.unexpected_modifications:
+            log(f"      \"{_shorten(m.before)}\"")
+            for fragment in m.fragments:
+                log(f"        lost: {_shorten(fragment, 60)!r}")
+
+    if vresult.added:
+        log(f"    FAIL — {len(vresult.added)} paragraph(s) in the output "
+            "were not in the input:")
+        for text in vresult.added:
+            log(f"      \"{_shorten(text)}\"")
 
 
 # ---------------------------------------------------------------------------
