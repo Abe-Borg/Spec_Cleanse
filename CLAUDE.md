@@ -286,10 +286,18 @@ Pushing the tag also starts `.github/workflows/release.yml`, which builds the
 Windows assets and attaches them. It runs on `windows-latest` because PyInstaller
 does not cross-compile — nothing in this repo can produce a Windows `.exe` from
 Linux or macOS. The workflow also accepts a `workflow_dispatch` with a tag name,
-which is how a release tagged before the workflow existed gets its assets, and
-how a build is retried without moving the tag. It runs on pull requests touching
+which retries a build without moving the tag. It runs on pull requests touching
 the packaging or what goes into it as well, uploading to the workflow run rather
 than to a release, so a build break is found before merge.
+
+A tag can only be built if its tree contains the packaging: a tag build checks
+out that tag alone, so anything added later is simply absent. The workflow
+verifies `requirements-build.txt`, both files under `packaging/` and `apppaths.py`
+are present straight after checkout and stops with the reason if they are not.
+`v1.0.0` therefore has no assets and is not going to get any — it also predates
+`apppaths.py`, so an executable built from it would read `patterns.yaml` out of
+PyInstaller's temporary extraction directory and silently discard every edit.
+Assets start at the first tag cut after packaging landed.
 
 Two assets are produced: `SpecCleanse-<version>-portable.exe` (a single windowed
 executable) and `SpecCleanse-Setup-<version>.exe` (an Inno Setup installer that

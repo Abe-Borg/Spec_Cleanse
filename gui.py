@@ -600,12 +600,17 @@ class SpecCleanseGUI:
         under pythonw.exe — while the buttons stayed disabled forever.
         """
         try:
-            return build_engine()
+            engine = build_engine()
         except Exception as exc:
             self._log(f"Configuration error in {CONFIG_PATH}: {exc}")
             self._log("Fix the file and try again — nothing was processed.")
             self._set_status("Configuration error")
             return None
+
+        # Every run starts by clearing the log, so the startup line is already
+        # gone. A finished run's log has to say which patterns produced it.
+        self._log(f"Patterns: {CONFIG_PATH}")
+        return engine
 
     def _run_preview(self, files: list[Path], strip_revisions: bool = False):
         try:

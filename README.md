@@ -245,7 +245,14 @@ Spec_Cleanse/
 PyInstaller does not cross-compile, so a Windows build has to happen on Windows.
 Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds both
 assets on a Windows runner and attaches them to the release; the same workflow
-can be run manually against an existing tag from the Actions tab.
+can be re-run manually against an existing tag from the Actions tab.
+
+Only tags that contain the packaging can be built. `v1.0.0` predates it and has
+no assets: it also predates the fix for `patterns.yaml` being read out of
+PyInstaller's temporary extraction directory, so an executable built from that
+tag would ship a build whose pattern edits silently do nothing. The workflow
+checks for the build tooling after checkout and stops with that explanation
+rather than failing obscurely later.
 
 The same workflow also runs on pull requests that touch the packaging or what
 goes into it. Those builds attach the two executables to the workflow run instead

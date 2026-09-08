@@ -3,11 +3,14 @@ name: Release
 # Builds the Windows executable and installer and attaches them to a release.
 #
 # PyInstaller does not cross-compile, so this has to run on Windows. Pushing a
-# vX.Y.Z tag builds and uploads automatically; workflow_dispatch covers a
-# release that was already tagged before this workflow existed, and lets a build
-# be re-run without moving the tag. Pull requests touching the packaging or what
-# goes into it build too, but upload nothing to a release — the point there is to
-# find out the build is broken before merging, not after tagging.
+# vX.Y.Z tag builds and uploads automatically; workflow_dispatch re-runs a build
+# against an existing tag without having to move it. Pull requests touching the
+# packaging or what goes into it build too, but upload nothing to a release — the
+# point there is to find out the build is broken before merging, not after
+# tagging.
+#
+# A tag can only be built if it contains the packaging, which is checked below.
+# Tags cut before it existed cannot be backfilled with assets.
 
 on:
   push:
@@ -73,6 +76,31 @@ jobs:
           # A tag build takes the tagged commit, not whatever master is at now.
           # Empty means the default ref, which is what a pull request wants.
           ref: ${{ steps.version.outputs.checkout_ref }}
+
+      - name: Check this ref contains the packaging
+        # A tag build populates the workspace from that tag alone. A tag cut
+        # before the packaging existed has none of the files below, and the
+        # dependency step would fail with a confusing pip error instead of
+        # saying why. Fail here with the reason.
+        shell: bash
+        run: |
+          missing=""
+          for f in requirements-build.txt packaging/speccleanse.spec \
+                   packaging/installer.iss apppaths.py; do
+            [ -f "$f" ] || missing="${missing} ${f}"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Ref '${{ steps.version.outputs.checkout_ref }}' is missing:${missing}"
+            echo ""
+            echo "Assets can only be built from a commit that contains the build"
+            echo "tooling. A tag predating it cannot be built here — and should not"
+            echo "be: it also predates the fix for patterns.yaml being read from"
+            echo "PyInstaller's temporary extraction directory, so the executable"
+            echo "would ship a build whose pattern edits silently do nothing."
+            echo "Cut a new tag from a commit that has the packaging instead."
+            exit 1
+          fi
+          echo "Packaging present."
 
       - uses: actions/setup-python@v5
         with:

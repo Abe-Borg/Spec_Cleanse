@@ -16,7 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from a folder or network share. Neither requires Python. Neither is signed, so
   SmartScreen warns on first run.
 - `.github/workflows/release.yml` builds and attaches those assets when a
-  `vX.Y.Z` tag is pushed, and can be run manually against an existing tag.
+  `vX.Y.Z` tag is pushed, builds them on pull requests that touch the packaging
+  so a break is caught before merge, and can be re-run manually against an
+  existing tag. Only tags containing the packaging can be built; `v1.0.0`
+  predates both it and the `patterns.yaml` fix below, so it has no assets.
 - `apppaths.py`, holding the runtime file locations, with tests that simulate a
   PyInstaller bundle.
 
