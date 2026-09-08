@@ -87,9 +87,42 @@ network folder.
 4. Click **Preview** to run a dry-run detection report.
 5. Click **CLEAN** to write cleaned documents (`*_cleaned.docx`).
 
-Processing runs on a background thread with a live log and progress bar. Files that
-already exist are only overwritten after you confirm, and a file left open in Word
-is reported as such instead of as an error code.
+Processing runs on a background thread with a live log and progress bar. A file left
+open in Word is reported as such instead of as an error code.
+
+Before anything is written, SpecCleanse works out every destination and checks the
+whole set. Two conflicts stop the run:
+
+- **Two selected files would be written to one destination.** Two documents named
+  `230500 Fire Suppression.docx` in different project folders both map to
+  `230500 Fire Suppression_cleaned.docx` when you choose a common output folder, and
+  the second clean would silently replace the first. Nothing on disk would show the
+  loss — the surviving file is a perfectly valid cleaned document, of the wrong
+  source.
+- **A destination is itself one of the selected files.** Processing is sequential, so
+  that input would be destroyed before its turn came.
+
+Either one rejects the batch with nothing written, and the log names the files
+involved. Choose a different output folder, or clean them in separate runs. Paths
+are compared as the filesystem sees them, so two spellings of one file — a different
+case on Windows, a symlink, a relative path — are recognised as the same file.
+
+Cleaned files that already exist from an earlier run are still only overwritten
+after you confirm, once the batch's own destinations are known to be distinct.
+
+### What the summary means
+
+Each file ends in one of three states, and the run's summary counts them
+separately — `Done: 8 verified, 2 need review, 1 failed.`
+
+| Outcome | Meaning |
+|---|---|
+| **Verified** | Written, and every difference between input and output was accounted for. |
+| **Needs review** | Written, but verification did not pass. The file is still produced and its path is named in the log; read the log before using it. |
+| **Failed** | Processing failed, or verification could not run at all. If the file was written before the check failed, the log says so and names it as unverified. |
+
+A successful write and a passing verification are separate facts. There is
+deliberately no "succeeded" total, because that word used to cover both.
 
 ### Strip comments and accept tracked changes (optional, off by default)
 
@@ -182,15 +215,31 @@ After cleaning, SpecCleanse compares the input and output and reports:
   fragment classified the same way. Inline redactions land here. A change that is
   not a pure deletion is never expected: if the text was altered rather than
   trimmed, it is reported.
+
+  To decide which output paragraph an input paragraph became, verification first
+  computes — from the source text and the configured patterns, independently of
+  anything the cleaner reports — what the paragraph becomes when every authorized
+  placeholder is cut out. An exact match to that text settles the pairing. Only if
+  no exact answer is found does it fall back to character similarity. That
+  fallback alone used to fail on the redactions that worked best: a paragraph
+  keeping under a third of its characters was rejected as too dissimilar, so
+  `Provide [Verify quantity with the Owner and the AHJ prior to bid] units.`
+  correctly cleaned to `Provide units.` was reported as an unexplained removal
+  plus an invented paragraph.
 - **Structural violations** — an emptied header, footer, footnote, text box or table
   cell; a cell that no longer ends with a paragraph; an unbalanced field; a lost
   section break. The input is inspected too, so a document's own pre-existing
   oddities are not blamed on the clean.
 - **Added paragraphs** — text in the output that was not in the input.
 
-A run passes only when all four come back clean. The verdict is advisory: a FAIL
-is written to the log with its supporting detail, but the cleaned file is still
-produced and still counts as processed, so read the log before trusting an output.
+A run passes only when all four come back clean. The verdict is advisory: a file
+that does not pass is still produced, but it is counted as **needs review** rather
+than as a success, and its path is named in the log.
+
+A PASS means every difference between input and output was accounted for by a
+configured rule, and the structural checks found nothing the input did not already
+have. It is not a statement that the document is correct, and not a claim that Word
+will open it without complaint.
 
 Verification borrows the detection engine's compiled patterns rather than
 recompiling its own copy, so the two can never drift apart. That makes the pattern
@@ -207,13 +256,21 @@ so it needs nothing beyond the runtime dependencies:
 python -m unittest discover -s tests -t .
 ```
 
-The GUI tests are skipped where `tkinter` is unavailable.
+The GUI tests are skipped where `tkinter` is unavailable — every Linux run. The
+rules that decide whether a batch is safe to write live in `batch.py` rather than
+`gui.py` for that reason, so they are exercised everywhere.
+
+One test is carried as an `unittest.expectedFailure`: an injected-damage case
+showing that an inline placeholder currently excuses deleting a requirement word
+beside it. The suite stays green while it fails, and turns red if it ever starts
+passing, which is what will prompt removing the decorator along with the defect.
 
 ## Project structure
 
 ```text
 Spec_Cleanse/
 ├── gui.py              # Tkinter interface and per-file workers
+├── batch.py            # Destination planning, collision rules, file outcomes
 ├── detection.py        # Pattern/format/style detectors and the engine
 ├── processor.py        # Unpack, remove, redact, repack
 ├── verify.py           # Input/output comparison and structural lint

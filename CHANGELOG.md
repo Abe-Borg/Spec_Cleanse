@@ -5,6 +5,61 @@ All notable changes to SpecCleanse are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Two selected documents sharing a basename mapped to one destination when a
+  common output folder was chosen, and the second clean silently replaced the
+  first. Nothing on disk showed the loss: the surviving file was a valid cleaned
+  document of the wrong source. Every destination is now worked out and the whole
+  set checked before any file is opened, and a batch whose destinations collide —
+  or one whose destination is itself a selected input — is rejected with nothing
+  written. Paths are compared as the filesystem sees them, so a different case on
+  Windows, a symlink or a relative spelling is recognised as the same file.
+- A failed verification was counted as a success. `_clean_one()` returned `True`
+  after logging `FAIL`, so a file with a preserve violation landed in the
+  "succeeded" total — the one line most people read. Each file now ends as
+  **verified**, **needs review**, or **failed**, counted separately
+  (`Done: 8 verified, 2 need review, 1 failed.`). A needs-review file is still
+  written and its path is named. Verification raising is told apart from
+  processing failing: when the write succeeded and only the check blew up, the log
+  says so and names the unverified file.
+- A tab, line break or non-breaking hyphen inside an inline placeholder was
+  counted for offsets and then left behind, so
+  `Provide [Verify quantity-with Owner] units.` cleaned to `Provide -units.`
+  Separators covered by a redaction are now removed with it. Page and column
+  breaks are the exception: they render as `\n` and so can fall inside a match,
+  but they are page setup rather than content, so they are kept and reported.
+- A correct long redaction was reported as damage.
+  `Provide [Verify quantity with the Owner and the AHJ prior to bid] units.`
+  cleans correctly to `Provide units.`, and verification called that an
+  unexplained removal plus an invented paragraph. The similarity threshold reads
+  as "about half the characters survived" but for a pure deletion rejects
+  anything keeping less than a third, so it failed on the redactions that worked
+  best. Verification now computes from the source what the paragraph becomes when
+  every authorized placeholder is cut, and an exact match settles the pairing
+  before similarity is consulted.
+
+### Added
+
+- `batch.py`, holding destination planning, the collision rules and `FileOutcome`.
+  It is free of Tk on purpose: `gui.py` imports `tkinter` at module level, so
+  anything defined there cannot be tested where Tk is absent — every Linux run.
+- `ProcessingResult.warnings`, for things worth reporting that did not stop the
+  run, such as a page break kept inside otherwise removed text. Separate from
+  `errors`, which decide `success`.
+- `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
+
+### Known
+
+- An inline placeholder still excuses deleting a requirement word beside it:
+  `Provide two [Verify quantity] spare filters per unit.` reduced to
+  `Provide two filters per unit.` verifies as expected, because classification
+  asks whether a lost fragment *contains* a pattern match rather than whether
+  matches *cover* it. The case is pinned by an `unittest.expectedFailure` test, so
+  the suite turns red when the behaviour changes.
+
 ## [1.1.0] - 2026-09-08
 
 ### Added
