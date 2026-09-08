@@ -179,7 +179,18 @@ Worth thinking about: should pairing use the redaction spans the processor actua
 
 ### 4.4 Copyright patterns fire on real specification prose, and verification blesses it — *high confidence, reproduced*
 
-`CopyrightDetector` is the only detector with no formatting or style gate: a text match alone scores 0.7 and takes the whole paragraph. Combined with the global `re.DOTALL` in `compile_patterns` and unbounded `.*?`, these fire on ordinary AEC language:
+**Four detectors cross the 0.5 threshold on a text match alone**, with no formatting or style evidence required: `SpecifierNoteDetector` (0.6), `CopyrightDetector` (0.7), the high-confidence branch of `EditorialArtifactDetector` (0.8), and `SpecAgentDetector` (1.0). Verified by feeding each a plain, unformatted run — all four remove the whole paragraph on the pattern match alone:
+
+```
+specifier_note       conf=0.60   '[Specifier: choose the appropriate hazard classification.]'
+copyright            conf=1.00   'Copyright 2026 by The American Institute of Architects. All rights reserved.'
+specagent            conf=1.00   'Retrieve spec agent data for this section.'
+editorial_artifact   conf=0.80   'Retain or delete paragraph below.'
+```
+
+**So the pattern audit has to cover all four, not just copyright.** Copyright is merely where I found reproducible false positives first — and `SpecAgentDetector` deserves particular scrutiny, because `spec\s*agent` is a generic English phrase scoring a flat 1.0 with no gate whatsoever (checklist item 24).
+
+Copyright's failures come from the global `re.DOTALL` in `compile_patterns` combined with unbounded `.*?`. These fire on ordinary AEC language:
 
 | Real spec sentence | Pattern that removes it |
 |---|---|
@@ -229,7 +240,7 @@ That last one matters more than it sounds. **The single most valuable thing that
 * **Element identity as a set key.** `_group_run_detections` and `_should_remove_paragraph` rely on `Detection.element` being the *same lxml proxy object* returned by a later `iter_own_runs()`. lxml guarantees this only while a reference is held — which it is, via the `Detection`. It works, but it is an undocumented load-bearing assumption. Worth a comment at minimum. Check whether any code path can violate it.
 * **`verbose=True` prints to stdout**, which goes nowhere under `pythonw.exe`; the GUI never sets it. Dead path.
 * **`_preview_one` creates a temp dir and an output path that a dry run never writes to.** Harmless, but confusing.
-* **`repack_docx` walks with `os.walk` in filesystem order**, so output bytes are not deterministic across runs. `sorted()` would make cleaned files byte-comparable, which is useful for caching and for diffing two runs.
+* **Cleaned output is not reproducible, and sorting the walk would not fix it.** `repack_docx` walks with `os.walk` in filesystem order, so member *order* is not guaranteed stable — but that is the lesser half. `ZipFile.write()` stores each file's filesystem mtime, and `extractall` does not restore the original timestamps, so every extracted part carries the *time of the run*. I cleaned one input twice, two seconds apart: member order was identical, every member's bytes were identical, and the two `.docx` files still had different SHA-256 hashes because all four stored timestamps differed. Reproducible output needs normalised `ZipInfo.date_time` (or deliberately preserved source timestamps), with `sorted()` as necessary-but-insufficient support. Worth having if content-hash caching (§6, Reading A) is ever built on top.
 * **`processor.process` catches bare `Exception`** and stringifies it, discarding the traceback. When a pattern change causes a crash, the user gets "Processing error: ..." and no location. Consider an opt-in debug path.
 * **Broad config validation gap.** `load_config` validates regex lists only. A colour written `#FF0000` or `red`, or a misspelled style name, silently matches nothing forever. Consider validating `formatting_signals.colors` shape, and — more useful — reporting **per-pattern hit counts** in Preview so dead patterns become visible.
 * **CI path filter misses the tests.** `.github/workflows/release.yml` filters on `"*.py"`, which in GitHub path syntax matches root-level files only. A PR touching only `tests/**` runs no CI at all. Also, the suite currently runs *only* inside a Windows packaging job; a 30-second `ubuntu-latest` unittest job on every push would be faster feedback and cheaper minutes.
@@ -274,7 +285,7 @@ Work through this, but do not stop at it. Anything you add is a contribution.
 15. Round-trip a real document through Word after cleaning. This is the only test that actually matters and no automated suite substitutes for it.
 
 **Correctness — detection quality**
-16. Enumerate false positives on real specification prose (§4.4 is a start, not the list).
+16. Enumerate false positives on real specification prose, across **all four** detectors that remove on text alone — specifier notes, copyright, high-confidence editorial, and SpecAgent (§4.4 is a start, not the list).
 17. Global `re.DOTALL` — audit every pattern against it. Which ones are wrong under it?
 18. Unbounded `.*?` in patterns meant to match within a delimiter — which can span a sentence or a paragraph?
 19. Is 0.5 the right threshold, and is "italic + colour lands exactly on it" a designed coincidence or an accident? What happens at 0.51 or 0.49?
