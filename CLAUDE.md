@@ -22,26 +22,36 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 |--------|---------|
 | `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
 | `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
-| `processor.py` | DOCX unpacking/repacking, XML walking, element removal |
-| `verify.py` | Post-processing verification comparing input vs. output paragraphs |
+| `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
+| `verify.py` | Post-processing verification: removals, modifications, structural lint |
+| `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
+| `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
 | `legacy/deep_cleaner.py` | Archived; not used |
 | `legacy/style_cleaner.py` | Archived; not used |
+
+`docx_xml.py` holds document-model plumbing only — it knows how WordprocessingML
+nests runs inside paragraphs and which containers Word refuses to open when empty,
+but no detection policy. Anything that decides *what* to remove belongs in
+`detection.py`.
 
 ### Configuration
 
 | File | Purpose |
 |------|---------|
-| `patterns.yaml` | All detection patterns, formatting signals, preserve rules |
+| `patterns.yaml` | All detection patterns, formatting signals, styles, preserve rules |
 | `requirements.txt` | Pinned Python dependencies (UTF-8) |
 
 ### Data Flow
 
 ```
 input.docx
-  → unpack ZIP → parse XML (document/headers/footers/footnotes/endnotes)
-  → detect → remove (collect-then-remove with tail-text preservation)
-  → repack
-  → verify: diff input vs. output, classify removals
+  → unpack ZIP → bind styles from word/styles.xml
+  → parse XML (document/headers/footers/footnotes/endnotes/glossary)
+  → optional: accept tracked changes, strip comments
+  → detect → collect targets → redact spans, remove runs, remove paragraphs
+  → repack (temp file, then os.replace)
+  → verify: diff input vs. output, classify removals and modifications,
+            compare structure
   → output_cleaned.docx
 ```
 
@@ -55,16 +65,19 @@ All detectors extend `BaseDetector` in `detection.py` and implement `detect(elem
 BaseDetector
 ├── SpecifierNoteDetector
 ├── CopyrightDetector
-├── HiddenTextDetector
+├── HiddenTextDetector          (run w:vanish, or inherited from a hidden style)
 ├── SpecAgentDetector
-├── EditorialArtifactDetector
-└── PreserveDetector (short-circuits removals)
+├── EditorialArtifactDetector   (also emits INLINE_PLACEHOLDER span detections)
+└── PreserveDetector            (short-circuits removals; patterns and styles)
 ```
 
 To add a new detector:
 1. Add patterns to `patterns.yaml`
 2. Create a detector class in `detection.py` extending `BaseDetector`
 3. Register it in `DetectionEngine._create_detectors()`
+
+Verification derives its categories from `DetectionEngine.removal_patterns()`, so a
+new detector's patterns are recognised there without a second registration.
 
 ### Confidence Scoring
 
@@ -74,16 +87,36 @@ Detections are scored 0.0–1.0. Multiple signals combine:
 - Editorial color (red, dark red, blue, light blue): +0.3
 - Editorial paragraph or character style: +0.8
 - Removal threshold: confidence ≥ 0.5
-- Preserve patterns short-circuit removals regardless of confidence
+- Preserve patterns and preserve styles short-circuit removals regardless of confidence
 
-`editorial_artifacts` uses a two-tier scheme: `text_patterns` are high-confidence and remove on text alone; `low_confidence_patterns` start at 0.3 and require a formatting signal to cross the threshold.
+Evidence is kept in two buckets. *Content* evidence — a text pattern or an editorial
+style — says what the text is; *formatting* evidence — italic, editorial colour —
+says only how it looks, and the two formatting signals together land on exactly the
+0.5 threshold. `specifier_notes.formatting_only_removal` (default true) decides
+whether formatting alone is enough; when it is false, formatting only boosts a score
+that content evidence already opened. Removals that crossed on formatting alone carry
+`Detection.formatting_only` and are labelled in Preview.
+
+`editorial_artifacts` uses three tiers: `text_patterns` are high-confidence and remove
+the whole paragraph on text alone; `low_confidence_patterns` start at 0.3 and require a
+formatting signal to cross the threshold; `inline_patterns` produce
+`ContentType.INLINE_PLACEHOLDER` detections carrying character `spans`, which are cut
+out of the paragraph in place. `DetectionEngine.should_remove()` ignores inline
+detections — they never remove their element.
+
+The inline tier must stay separable when *judging* a removal, which is why
+`removal_patterns()` takes `include_inline`. An inline pattern matching a paragraph
+that vanished entirely means only that the paragraph contained a placeholder — never
+that losing it was intended. Verification asks the narrower question instead: does
+cutting every placeholder leave nothing behind?
 
 ### Dataclass-Based Results
 
 Processing results are communicated via dataclasses, not exceptions:
-- `Detection` — individual content detection with confidence
-- `ProcessingResult` — aggregated results with errors list
-- `RemovedParagraph` / `VerificationResult` — verification output
+- `Detection` — individual content detection with confidence, spans, formatting flag
+- `ProcessingResult` — detections plus an errors list
+- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a pattern name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained
+- `StyleInfo` / `StyleIndex` — `word/styles.xml` resolved for name and `w:basedOn` matching
 
 Errors accumulate in result objects; processing doesn't halt on non-fatal issues.
 
@@ -96,7 +129,7 @@ The project uses `lxml` for direct XML manipulation rather than `python-docx`. T
 
 ### XML Namespace Handling
 
-Word namespaces are defined consistently across modules:
+Word namespaces are defined once, in `docx_xml.py`, and imported from there — never redeclared in a module:
 ```python
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W = f"{{{W_NS}}}"
@@ -114,18 +147,44 @@ NAMESPACES = {
 
 ### Safe Element Removal
 
-Elements marked for removal are collected during iteration, then removed in a second pass. Tail text (text nodes after an element) is preserved by appending to the previous sibling or parent. Parent existence is verified before any removal.
+Elements marked for removal are collected during iteration, then removed in a second pass — mutating the tree while iterating it skips elements. Targets are applied in a fixed order: redactions (whose spans are offsets into the paragraph text as it stands), then runs, then paragraphs.
+
+Deleting a `w:p` element is wrong in four situations, and `_remove_paragraph` empties the paragraph in place instead of deleting it in each of them:
+
+| Situation | Why | Check |
+|-----------|-----|-------|
+| A field begins inside and ends later | Unbalanced `w:fldChar` is a file Word refuses to open | `field_chars_balanced()` |
+| The paragraph carries `w:pPr/w:sectPr` | It is a section boundary; deleting it merges the section into the next and loses its headers, footers and page setup | `has_section_properties()` |
+| It holds a picture, object, field, or note reference | The content is invisible to text patterns but not to the reader | `has_embedded_content()` |
+| Its parent would be left with no block content | `CT_HdrFtr` and friends carry `minOccurs="1"`; a table cell must also *end* with a `w:p` | `can_delete_paragraph()` |
+
+Half-open `w:bookmarkStart`/`w:bookmarkEnd` and comment-range markers are relocated beside the paragraph before it is deleted — they are legal at block level, so the range keeps spanning the same content.
+
+There is no tail-text handling: in WordprocessingML an element tail is only inter-element whitespace, so preserving it protects nothing.
 
 ### Files Walked
 
-`processor.py` and `verify.py` both walk the same set of XML files inside the `word/` directory:
+`processor.py` and `verify.py` both walk the parts returned by `docx_xml.collect_content_parts()`, inside the `word/` directory:
 - `document.xml`
 - `header*.xml`
 - `footer*.xml`
 - `footnotes.xml`
 - `endnotes.xml`
+- `glossary/document.xml`
 
-Keep these two lists in sync. If you add coverage for a new XML file in one place, add it to the other.
+Both go through that one function, so the lists cannot drift. Add new coverage there, not in either caller.
+
+### Iteration and Nesting
+
+Every run lives inside a paragraph — directly, or through `w:hyperlink`, `w:ins`, `w:sdtContent`, `w:fldSimple`, `w:smartTag`. `iter_own_runs()` finds all of them without crossing into a paragraph nested in a text box, because that inner paragraph is visited in its own right by `iter_paragraphs()`. Never use `para.iter(w:r)` or `para.iter(w:t)` directly: it double-counts text-box content and attributes it to the wrong paragraph.
+
+`mc:AlternateContent` stores the same shape twice, under `mc:Choice` and `mc:Fallback`. Processing walks both (each has to be cleaned); text extraction passes `skip_alternate_fallback=True` so the content is counted once.
+
+### Text Extraction
+
+`element_text()` yields `w:t` text plus the whitespace that tabs (`\t`), breaks (`\n`) and non-breaking hyphens render as, in document order. Without that, `PART 1<w:tab/>GENERAL` extracts as `PART 1GENERAL` and both `\s+` patterns and the `^`-anchored preserve patterns fail. `iter_text_nodes()` yields `(element, text)` pairs so character offsets map back onto the nodes they came from, which is what inline redaction relies on.
+
+`w:delText` (tracked deletions) and `w:instrText` (field codes) are deliberately not extracted.
 
 ## Code Conventions
 
@@ -183,9 +242,15 @@ Processing runs on a background thread with a live log and progress bar.
 
 ## Testing
 
-### Current Approach
+### Automated Tests
 
-There is no automated test suite. Testing is done manually with sample DOCX files placed in the repository root. Test output goes to `spec_testing/` (gitignored).
+```bash
+python -m unittest discover -s tests -t .
+```
+
+Stdlib `unittest`, no new dependency. `tests/docx_builder.py` assembles synthetic `.docx` files with `zipfile`, so structural cases — a sole paragraph in a footer, a cell that would stop ending with a paragraph, a `w:sectPr` paragraph, an unbalanced field — are covered without binary fixtures. `tests/support.py` provides `DocxTestCase` with `build()`, `clean()`, `detect()`, and parsed-XML assertions. GUI tests skip where `tkinter` is unavailable.
+
+Add a test whenever you touch removal safety, the pattern tiers, or verification classification.
 
 ### Manual Testing Workflow
 
@@ -196,9 +261,10 @@ Run the GUI against sample files. The log output shows:
 
 ### When Making Changes
 
-1. Run the GUI against representative DOCX files (with and without footnotes/headers)
-2. Open the output in Word to verify formatting is preserved
-3. Check the verification output for unexpected removals or preserve violations
+1. Run `python -m unittest discover -s tests -t .`
+2. Run the GUI against representative DOCX files (with and without footnotes/headers)
+3. Open the output in Word — there must be no "unreadable content" prompt
+4. Check the verification output for unexpected removals, unexpected modifications, preserve violations, and structural violations
 
 ## Common Modification Scenarios
 
@@ -214,7 +280,12 @@ Run the GUI against sample files. The log output shows:
 2. Create a new detector class extending `BaseDetector`
 3. Register it in `DetectionEngine._create_detectors()`
 4. Add corresponding patterns to `patterns.yaml`
-5. Add the new category to `_build_removal_patterns` in `verify.py` so verification recognizes it
+
+Verification picks the category up automatically from `DetectionEngine.removal_patterns()`.
+
+### Adding an Inline Placeholder
+
+Add the pattern to `editorial_artifacts.inline_patterns`. No code change is needed: matches become `INLINE_PLACEHOLDER` detections with character spans, the processor cuts them out in place, and verification classifies the resulting modification.
 
 ### Modifying XML Processing
 
@@ -229,4 +300,9 @@ Run the GUI against sample files. The log output shows:
 - **Direct XML manipulation** — not using `python-docx`, so changes must be XML-aware
 - **No structural/style optimization** — those stages were retired; the cleaner only removes content
 - **Temp files** are created with `tempfile.mkdtemp(prefix="speccleanse_")` and cleaned up in `finally` blocks
-- **`patterns.yaml`** must be in the same directory as `gui.py`
+- **`patterns.yaml`** must be in the same directory as `gui.py`, and is always read as UTF-8 — it contains `©`, `–` and `—`, which the Windows default encoding silently mangles
+- **Toggle properties** (`w:i`, `w:b`, `w:vanish`) are on when present *without* `w:val`, and off when `w:val` is `0`/`false`/`off`. Use `docx_xml.is_on()`/`toggle_on()`, never a bare `find(...) is not None`
+- **Toggle properties inherited through styles do not accumulate.** Along a `w:basedOn` chain they XOR: a style that repeats its base style's `<w:vanish/>` switches hidden back *off*, and Word renders that text normally. `StyleIndex.is_hidden()` implements that, and treats an explicit `w:val="0"` anywhere in the chain as off — where the spec leaves room, take the reading that keeps text
+- **Tracked deletions are not all marked up the same way.** A deleted run holds `w:delText`, which no extractor reads; a deleted table *row* keeps ordinary `w:t` and records the deletion only in `w:trPr` (cells use `w:cellDel`). Accepting revisions therefore has to remove the row or cell whole, not just the marker
+- **Repacking** writes to a temp file and `os.replace`s it into place, so an interrupted run cannot leave a truncated `.docx`
+- **Tracked changes and comments** are only touched when `DocxProcessor(strip_revisions=True)`, which the GUI exposes as a checkbox, default off

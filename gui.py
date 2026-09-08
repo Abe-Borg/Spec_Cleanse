@@ -6,16 +6,19 @@ Tkinter-based graphical interface for SpecCleanse.
 Runs single-pass content removal and verification on one or more DOCX files.
 """
 
+import os
+import queue
 import shutil
+import subprocess
+import sys
 import tempfile
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import filedialog, ttk
-
-import yaml
+from tkinter import filedialog, messagebox, ttk
 
 from detection import DetectionEngine, ContentType
+from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
 from verify import verify_clean
 
@@ -27,16 +30,28 @@ from verify import verify_clean
 CONFIG_PATH = Path(__file__).parent / "patterns.yaml"
 
 
-def load_config() -> dict:
-    with open(CONFIG_PATH, "r") as f:
-        return yaml.safe_load(f)
+def build_engine() -> DetectionEngine:
+    """Load patterns.yaml and build the detection engine.
+
+    Raises FileNotFoundError or ValueError with a readable message if the
+    configuration is missing, empty, malformed, or holds an invalid regex.
+    """
+    return DetectionEngine(load_config(CONFIG_PATH))
 
 
-def _preview_one(input_path: Path, log) -> bool:
+def _shorten(text: str, width: int = 90) -> str:
+    """One-line preview of a paragraph, trimmed to ``width`` characters."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= width else flat[:width] + "..."
+
+
+def _preview_one(
+    input_path: Path, engine: DetectionEngine, log, strip_revisions: bool = False
+) -> bool:
     """Run a dry-run preview on a single file and log detections."""
-    config = load_config()
-    engine = DetectionEngine(config)
-    processor = DocxProcessor(engine, verbose=False, dry_run=True)
+    processor = DocxProcessor(
+        engine, verbose=False, dry_run=True, strip_revisions=strip_revisions
+    )
 
     temp_dir = Path(tempfile.mkdtemp(prefix="speccleanse_preview_"))
     preview_output = temp_dir / f"{input_path.stem}_preview.docx"
@@ -52,26 +67,31 @@ def _preview_one(input_path: Path, log) -> bool:
                 log(f"  ERROR: {err}")
             return False
 
-        removed = [d for d in result.detections if d.content_type != ContentType.PRESERVE]
-        preserved = [d for d in result.detections if d.content_type == ContentType.PRESERVE]
+        removed, redacted, preserved = _group_detections(result.detections)
 
-        log(f"  Would remove {len(removed)} items, preserve {len(preserved)}")
+        log(f"  Would remove {sum(len(v) for v in removed.values())} items,"
+            f" redact {len(redacted)} inline placeholder(s),"
+            f" preserve {len(preserved)}")
 
-        if removed:
-            log("\n  REMOVALS:")
-            for d in removed:
-                preview = d.text.replace("\n", " ").strip()
-                if len(preview) > 90:
-                    preview = preview[:90] + "..."
-                log(f"    [{d.content_type.value}, {d.confidence:.2f}] \"{preview}\"")
+        for category in sorted(removed):
+            detections = removed[category]
+            log(f"\n  REMOVALS — {category} ({len(detections)}):")
+            for d in detections:
+                label = f"{d.confidence:.2f}"
+                if d.formatting_only:
+                    label += ", formatting-only"
+                log(f"    [{label}] \"{_shorten(d.text)}\"")
+
+        if redacted:
+            log(f"\n  INLINE REDACTIONS ({len(redacted)}):")
+            for d in redacted:
+                cuts = ", ".join(d.text[start:end] for start, end in d.spans)
+                log(f"    cut {_shorten(cuts, 60)!r} from \"{_shorten(d.text)}\"")
 
         if preserved:
-            log("\n  PRESERVED:")
+            log(f"\n  PRESERVED ({len(preserved)}):")
             for d in preserved:
-                preview = d.text.replace("\n", " ").strip()
-                if len(preview) > 90:
-                    preview = preview[:90] + "..."
-                log(f"    [preserve, {d.confidence:.2f}] \"{preview}\"")
+                log(f"    [preserve, {d.confidence:.2f}] \"{_shorten(d.text)}\"")
 
         return True
 
@@ -84,11 +104,32 @@ def _preview_one(input_path: Path, log) -> bool:
             shutil.rmtree(temp_dir)
 
 
-def _clean_one(input_path: Path, output_path: Path, log) -> bool:
+def _group_detections(detections):
+    """Split detections into removals by category, redactions, and preserves."""
+    removed: dict[str, list] = {}
+    redacted = []
+    preserved = []
+
+    for d in detections:
+        if d.content_type == ContentType.PRESERVE:
+            preserved.append(d)
+        elif d.content_type == ContentType.INLINE_PLACEHOLDER:
+            redacted.append(d)
+        else:
+            removed.setdefault(d.content_type.value, []).append(d)
+
+    return removed, redacted, preserved
+
+
+def _clean_one(
+    input_path: Path,
+    output_path: Path,
+    engine: DetectionEngine,
+    log,
+    strip_revisions: bool = False,
+) -> bool:
     """Run single-pass content removal on a single file."""
-    config = load_config()
-    engine = DetectionEngine(config)
-    processor = DocxProcessor(engine, verbose=False)
+    processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
     try:
         log("  Content removal...")
@@ -102,47 +143,75 @@ def _clean_one(input_path: Path, output_path: Path, log) -> bool:
                 log(f"  ERROR: {err}")
             return False
 
-        removed = [d for d in result.detections if d.content_type != ContentType.PRESERVE]
-        preserved = [d for d in result.detections if d.content_type == ContentType.PRESERVE]
-        log(f"    Removed {len(removed)} items, preserved {len(preserved)}")
-
-        original_size = input_path.stat().st_size
-        final_size = output_path.stat().st_size
-        saved = original_size - final_size
-        pct = (saved / original_size * 100) if original_size else 0
+        removed, redacted, preserved = _group_detections(result.detections)
+        log(f"    Removed {sum(len(v) for v in removed.values())} items,"
+            f" redacted {len(redacted)} inline placeholder(s),"
+            f" preserved {len(preserved)}")
 
         log("  Verifying no spec content was lost...")
-        vresult = verify_clean(input_path, output_path)
-        n_expected = len(vresult.expected_removals)
-        n_unexpected = len(vresult.unexpected_removals)
-        n_preserve = len(vresult.preserve_violations)
-        log(f"    Paragraphs removed: {len(vresult.removed)}"
-            f" ({n_expected} expected, {n_unexpected} unexpected"
-            f", {n_preserve} preserve violations)")
-        if vresult.passed:
-            log("    PASS — all removals match known bloat patterns")
-        else:
-            if n_preserve:
-                log(f"    FAIL — {n_preserve} preserve violation(s) "
-                    "(content that should NEVER be removed):")
-                for r in vresult.preserve_violations:
-                    preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
-                    preview = preview.replace("\n", " ")
-                    log(f"      \"{preview}\"")
-                    log(f"        matched: {r.pattern_matched}")
-            if n_unexpected:
-                log(f"    WARN — {n_unexpected} removal(s) may be real content:")
-            for r in vresult.unexpected_removals:
-                preview = r.text[:90] + "..." if len(r.text) > 90 else r.text
-                preview = preview.replace("\n", " ")
-                log(f"      \"{preview}\"")
+        vresult = verify_clean(
+            input_path, output_path, engine=engine, strip_revisions=strip_revisions
+        )
+        _log_verification(vresult, log)
 
-        log(f"  Done: {original_size:,} -> {final_size:,} bytes ({pct:.1f}% smaller)")
+        log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
+            f" {vresult.removed_characters:,} characters of text taken out")
         return True
 
     except Exception as exc:
         log(f"  FAILED: {exc}")
         return False
+
+
+def _log_verification(vresult, log) -> None:
+    """Print the verification report: removals, modifications, structure."""
+    n_unexpected = len(vresult.unexpected_removals)
+    n_preserve = len(vresult.preserve_violations)
+
+    log(f"    Paragraphs removed: {len(vresult.removed)}"
+        f" ({len(vresult.expected_removals)} expected, {n_unexpected} unexpected"
+        f", {n_preserve} preserve violations)")
+
+    if vresult.modified:
+        log(f"    Paragraphs modified: {len(vresult.modified)}"
+            f" ({len(vresult.expected_modifications)} expected,"
+            f" {len(vresult.unexpected_modifications)} unexpected)")
+
+    if vresult.passed:
+        log("    PASS — every change matches a rule and the structure is intact")
+        return
+
+    if vresult.structural:
+        log(f"    FAIL — {len(vresult.structural)} structural problem(s) "
+            "the output has and the input did not:")
+        for violation in vresult.structural:
+            log(f"      {violation}")
+
+    if n_preserve:
+        log(f"    FAIL — {n_preserve} preserve violation(s) "
+            "(content that should NEVER be removed):")
+        for r in vresult.preserve_violations:
+            log(f"      \"{_shorten(r.text)}\"")
+            log(f"        matched: {r.pattern_matched}")
+
+    if n_unexpected:
+        log(f"    WARN — {n_unexpected} removal(s) may be real content:")
+        for r in vresult.unexpected_removals:
+            log(f"      \"{_shorten(r.text)}\"")
+
+    if vresult.unexpected_modifications:
+        log(f"    WARN — {len(vresult.unexpected_modifications)} paragraph(s) "
+            "lost text no rule accounts for:")
+        for m in vresult.unexpected_modifications:
+            log(f"      \"{_shorten(m.before)}\"")
+            for fragment in m.fragments:
+                log(f"        lost: {_shorten(fragment, 60)!r}")
+
+    if vresult.added:
+        log(f"    FAIL — {len(vresult.added)} paragraph(s) in the output "
+            "were not in the input:")
+        for text in vresult.added:
+            log(f"      \"{_shorten(text)}\"")
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +243,11 @@ class SpecCleanseGUI:
         self.output_dir: Path | None = None
         self._running = False
 
+        # The worker thread writes log lines here; the main loop drains them.
+        self._log_queue: queue.Queue[str] = queue.Queue()
+
         self._build_ui()
+        self._drain_log()
 
     def _build_ui(self):
         style = ttk.Style()
@@ -213,6 +286,13 @@ class SpecCleanseGUI:
         )
         self.btn_add.pack(side="left")
 
+        self.btn_remove = tk.Button(
+            file_frame, text="Remove Selected", command=self._remove_selected,
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+        )
+        self.btn_remove.pack(side="left", padx=(8, 0))
+
         self.btn_clear = tk.Button(
             file_frame, text="Clear", command=self._clear_files,
             bg=SURFACE, fg=FG, activebackground=RED, activeforeground=BG,
@@ -227,7 +307,7 @@ class SpecCleanseGUI:
         list_frame.pack(fill="both", expand=False, pady=(0, 8))
 
         self.file_listbox = tk.Listbox(
-            list_frame, height=5,
+            list_frame, height=5, selectmode="extended",
             bg=BG_LIGHT, fg=FG, selectbackground=ACCENT, selectforeground=BG,
             font=("Consolas", 9), relief="flat", borderwidth=0,
             highlightthickness=1, highlightcolor=SURFACE, highlightbackground=SURFACE,
@@ -247,11 +327,33 @@ class SpecCleanseGUI:
         )
         self.btn_outdir.pack(side="left")
 
+        self.btn_open_outdir = tk.Button(
+            out_frame, text="Open Output Folder", command=self._open_output_dir,
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+        )
+        self.btn_open_outdir.pack(side="left", padx=(8, 0))
+
         self.lbl_outdir = ttk.Label(
             out_frame, text="Default: same folder as input, with _cleaned suffix",
             style="Sub.TLabel",
         )
         self.lbl_outdir.pack(side="left", padx=(12, 0))
+
+        option_frame = ttk.Frame(outer)
+        option_frame.pack(fill="x", pady=(0, 8))
+
+        self.strip_revisions = tk.BooleanVar(value=False)
+        self.chk_revisions = tk.Checkbutton(
+            option_frame,
+            text="Strip comments and accept tracked changes",
+            variable=self.strip_revisions,
+            bg=BG, fg=FG, selectcolor=BG_LIGHT, activebackground=BG,
+            activeforeground=FG, disabledforeground=FG_DIM,
+            font=("Segoe UI", 9), relief="flat", highlightthickness=0,
+            anchor="w",
+        )
+        self.chk_revisions.pack(side="left")
 
         action_frame = ttk.Frame(outer)
         action_frame.pack(pady=(4, 8))
@@ -308,6 +410,12 @@ class SpecCleanseGUI:
                 self.file_listbox.insert("end", str(pp))
         self._update_count()
 
+    def _remove_selected(self):
+        for index in sorted(self.file_listbox.curselection(), reverse=True):
+            self.file_listbox.delete(index)
+            del self.files[index]
+        self._update_count()
+
     def _clear_files(self):
         self.files.clear()
         self.file_listbox.delete(0, "end")
@@ -325,18 +433,53 @@ class SpecCleanseGUI:
             self.output_dir = Path(d)
             self.lbl_outdir.configure(text=str(self.output_dir))
 
-    def _output_for(self, input_path: Path) -> Path:
+    def _open_output_dir(self):
+        """Open the folder the cleaned files go to in the system file browser."""
+        folder = self.output_dir
+        if folder is None and self.files:
+            folder = self.files[0].parent
+        if folder is None:
+            self._log("No output folder yet — add a file or choose one.")
+            return
+        if not folder.exists():
+            self._log(f"Folder does not exist: {folder}")
+            return
+
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)  # noqa: S606 - the platform's own file browser
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(folder)])
+            else:
+                subprocess.Popen(["xdg-open", str(folder)])
+        except OSError as exc:
+            self._log(f"Could not open {folder}: {exc}")
+
+    def _output_for(self, input_path: Path, output_dir: Path | None = None) -> Path:
         stem = input_path.stem + "_cleaned"
-        parent = self.output_dir if self.output_dir else input_path.parent
+        parent = output_dir if output_dir else input_path.parent
         return parent / (stem + ".docx")
 
     def _log(self, text: str):
-        def _append():
+        """Queue a line for the log; safe to call from the worker thread."""
+        self._log_queue.put(text)
+
+    def _drain_log(self):
+        """Move queued log lines into the widget, on the main thread."""
+        lines: list[str] = []
+        while True:
+            try:
+                lines.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        if lines:
             self.log_text.configure(state="normal")
-            self.log_text.insert("end", text + "\n")
+            self.log_text.insert("end", "\n".join(lines) + "\n")
             self.log_text.see("end")
             self.log_text.configure(state="disabled")
-        self.root.after(0, _append)
+
+        self.root.after(100, self._drain_log)
 
     def _set_status(self, text: str):
         self.root.after(0, lambda: self.lbl_status.configure(text=text))
@@ -346,19 +489,37 @@ class SpecCleanseGUI:
 
     def _disable_controls(self):
         self._running = True
-        self.btn_preview.configure(state="disabled")
-        self.btn_clean.configure(state="disabled")
-        self.btn_add.configure(state="disabled")
-        self.btn_clear.configure(state="disabled")
+        for button in self._run_controls():
+            button.configure(state="disabled")
 
     def _enable_controls(self):
         self._running = False
-        self.btn_preview.configure(state="normal")
-        self.btn_clean.configure(state="normal")
-        self.btn_add.configure(state="normal")
-        self.btn_clear.configure(state="normal")
+        for button in self._run_controls():
+            button.configure(state="normal")
+
+    def _run_controls(self) -> list[tk.Widget]:
+        """Controls that must not be usable while a run is in flight.
+
+        Everything that feeds a run is included: each run works from the
+        selection, destination, and options it started with, so leaving these
+        live would only let a mid-run change look like it took effect.
+        """
+        return [
+            self.btn_preview,
+            self.btn_clean,
+            self.btn_add,
+            self.btn_remove,
+            self.btn_clear,
+            self.btn_outdir,
+            self.chk_revisions,
+        ]
 
     def _clear_log(self):
+        while True:
+            try:
+                self._log_queue.get_nowait()
+            except queue.Empty:
+                break
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0", "end")
         self.log_text.configure(state="disabled")
@@ -370,9 +531,45 @@ class SpecCleanseGUI:
             self._log("No files selected. Click 'Add Files...' first.")
             return
 
+        # Snapshot the inputs here, on the main thread: the run should finish
+        # against the selection, destination, and options it started with.
+        files = list(self.files)
+        output_dir = self.output_dir
+        strip_revisions = self.strip_revisions.get()
+
+        if not self._confirm_overwrite(files, output_dir):
+            return
+
         self._disable_controls()
         self._clear_log()
-        threading.Thread(target=self._run_clean, daemon=True).start()
+        threading.Thread(
+            target=self._run_clean,
+            args=(files, output_dir, strip_revisions),
+            daemon=True,
+        ).start()
+
+    def _confirm_overwrite(self, files: list[Path], output_dir: Path | None) -> bool:
+        """Ask before replacing cleaned files from an earlier run."""
+        existing = [
+            out for out in (self._output_for(f, output_dir) for f in files)
+            if out.exists()
+        ]
+        if not existing:
+            return True
+
+        listed = "\n".join(f"  {out.name}" for out in existing[:8])
+        if len(existing) > 8:
+            listed += f"\n  ...and {len(existing) - 8} more"
+
+        confirmed = messagebox.askyesno(
+            "Overwrite existing files?",
+            f"{len(existing)} cleaned file(s) already exist and will be "
+            f"replaced:\n\n{listed}",
+            parent=self.root,
+        )
+        if not confirmed:
+            self._log("Cancelled — nothing was written.")
+        return confirmed
 
     def _start_preview(self):
         if self._running:
@@ -381,69 +578,110 @@ class SpecCleanseGUI:
             self._log("No files selected. Click 'Add Files...' first.")
             return
 
+        files = list(self.files)
+        strip_revisions = self.strip_revisions.get()
+
         self._disable_controls()
         self._clear_log()
-        threading.Thread(target=self._run_preview, daemon=True).start()
+        threading.Thread(
+            target=self._run_preview, args=(files, strip_revisions), daemon=True
+        ).start()
 
-    def _run_preview(self):
-        total = len(self.files)
-        successes = 0
-        failures = 0
+    def _load_engine(self) -> DetectionEngine | None:
+        """Build the detection engine once per run, reporting config errors.
 
-        for i, fpath in enumerate(self.files, 1):
-            self._set_status(f"Previewing {i}/{total}: {fpath.name}")
-            self._set_progress((i - 1) / total * 100)
-            self._log(f"[{i}/{total}] {fpath.name} — Preview")
+        Configuration problems used to surface as a stderr traceback — invisible
+        under pythonw.exe — while the buttons stayed disabled forever.
+        """
+        try:
+            return build_engine()
+        except Exception as exc:
+            self._log(f"Configuration error in {CONFIG_PATH.name}: {exc}")
+            self._log("Fix the file and try again — nothing was processed.")
+            self._set_status("Configuration error")
+            return None
 
-            ok = _preview_one(fpath, self._log)
-            if ok:
-                successes += 1
-            else:
-                failures += 1
+    def _run_preview(self, files: list[Path], strip_revisions: bool = False):
+        try:
+            engine = self._load_engine()
+            if engine is None:
+                return
 
-            self._log("")
+            total = len(files)
+            successes = 0
+            failures = 0
 
-        self._set_progress(100)
+            for i, fpath in enumerate(files, 1):
+                self._set_status(f"Previewing {i}/{total}: {fpath.name}")
+                self._set_progress((i - 1) / total * 100)
+                self._log(f"[{i}/{total}] {fpath.name} — Preview")
 
-        summary = f"Preview done: {successes} succeeded"
-        if failures:
-            summary += f", {failures} failed"
-        self._set_status(summary)
-        self._log("=" * 50)
-        self._log(summary)
+                ok = _preview_one(fpath, engine, self._log, strip_revisions)
+                if ok:
+                    successes += 1
+                else:
+                    failures += 1
 
-        self.root.after(0, self._enable_controls)
+                self._log("")
 
-    def _run_clean(self):
-        total = len(self.files)
-        successes = 0
-        failures = 0
+            self._set_progress(100)
 
-        for i, fpath in enumerate(self.files, 1):
-            self._set_status(f"Cleaning {i}/{total}: {fpath.name}")
-            self._set_progress((i - 1) / total * 100)
-            self._log(f"[{i}/{total}] {fpath.name}")
+            summary = f"Preview done: {successes} succeeded"
+            if failures:
+                summary += f", {failures} failed"
+            self._set_status(summary)
+            self._log("=" * 50)
+            self._log(summary)
 
-            out = self._output_for(fpath)
-            ok = _clean_one(fpath, out, self._log)
-            if ok:
-                successes += 1
-                self._log(f"  -> {out.name}")
-            else:
-                failures += 1
+        except Exception as exc:
+            self._log(f"Preview stopped: {exc}")
+            self._set_status("Preview stopped — see log")
 
-            self._log("")
+        finally:
+            self.root.after(0, self._enable_controls)
 
-        self._set_progress(100)
+    def _run_clean(
+        self, files: list[Path], output_dir: Path | None, strip_revisions: bool = False
+    ):
+        try:
+            engine = self._load_engine()
+            if engine is None:
+                return
 
-        summary = f"Done: {successes} succeeded"
-        if failures:
-            summary += f", {failures} failed"
-        self._set_status(summary)
-        self._log("=" * 50)
-        self._log(summary)
+            total = len(files)
+            successes = 0
+            failures = 0
 
-        self.root.after(0, self._enable_controls)
+            for i, fpath in enumerate(files, 1):
+                self._set_status(f"Cleaning {i}/{total}: {fpath.name}")
+                self._set_progress((i - 1) / total * 100)
+                self._log(f"[{i}/{total}] {fpath.name}")
+
+                out = self._output_for(fpath, output_dir)
+                ok = _clean_one(fpath, out, engine, self._log, strip_revisions)
+                if ok:
+                    successes += 1
+                    self._log(f"  -> {out.name}")
+                else:
+                    failures += 1
+
+                self._log("")
+
+            self._set_progress(100)
+
+            summary = f"Done: {successes} succeeded"
+            if failures:
+                summary += f", {failures} failed"
+            self._set_status(summary)
+            self._log("=" * 50)
+            self._log(summary)
+
+        except Exception as exc:
+            self._log(f"Clean stopped: {exc}")
+            self._set_status("Clean stopped — see log")
+
+        finally:
+            self.root.after(0, self._enable_controls)
 
 
 def main():
