@@ -465,6 +465,36 @@ def _matches_preserve(text: str, preserve_patterns) -> str | None:
     return None
 
 
+def _inline_spans(text: str, inline_patterns) -> tuple[list[tuple[int, int]], list[str]]:
+    """Every authorized placeholder interval in ``text``, and the rules behind them.
+
+    Read from the source text and the configured patterns.  Nothing the
+    processor reports is consulted: what the cleaner claims it did is not
+    evidence about what the output contains.
+    """
+    spans: list[tuple[int, int]] = []
+    matched: list[str] = []
+    for pattern in inline_patterns:
+        for match in pattern.finditer(text):
+            if match.end() > match.start():
+                spans.append((match.start(), match.end()))
+                matched.append(pattern.pattern)
+    return spans, matched
+
+
+def _expected_after_redaction(text: str, inline_patterns) -> str | None:
+    """What ``text`` becomes when every authorized placeholder is cut out.
+
+    Computed from the source, by the same span arithmetic the processor uses
+    but independently of it.  ``None`` when no placeholder matches, so there
+    is no permitted transformation to expect.
+    """
+    spans, _ = _inline_spans(text, inline_patterns)
+    if not spans:
+        return None
+    return cut_spans(text, tidy_spans(text, merge_spans(spans))).strip()
+
+
 def _placeholders_only(text: str, inline_patterns) -> str | None:
     """The pattern that explains a paragraph made of nothing but placeholders.
 
@@ -474,14 +504,7 @@ def _placeholders_only(text: str, inline_patterns) -> str | None:
     out leaves no text behind, which is the same test the processor applies
     before removing such a paragraph itself.
     """
-    spans: list[tuple[int, int]] = []
-    matched: list[str] = []
-    for pattern in inline_patterns:
-        for match in pattern.finditer(text):
-            if match.end() > match.start():
-                spans.append((match.start(), match.end()))
-                matched.append(pattern.pattern)
-
+    spans, matched = _inline_spans(text, inline_patterns)
     if not spans:
         return None
     if cut_spans(text, tidy_spans(text, merge_spans(spans))).strip():
@@ -574,7 +597,9 @@ def verify_clean(
         paired: set[int] = set()
         for idx in range(i1, i2):
             info = input_paras[idx]
-            match = _pair_with_survivor(info.text, output_texts, j1, j2, paired)
+            match = _pair_with_survivor(
+                info.text, output_texts, j1, j2, paired, inline_patterns
+            )
 
             if match is None:
                 result.removed.append(
@@ -614,14 +639,39 @@ def _pair_with_survivor(
     j1: int,
     j2: int,
     paired: set[int],
+    inline_patterns=(),
 ) -> tuple[int, list[str]] | None:
-    """Find the output paragraph this input paragraph turned into, if any."""
+    """Find the output paragraph this input paragraph turned into, if any.
+
+    Exact answers are taken first: an unchanged paragraph, or one that matches
+    exactly what cutting every authorized placeholder out of the source would
+    produce.  Both are certainties.  ``MIN_PAIR_SIMILARITY`` is a guess, and a
+    guess that fails on precisely the redactions that worked: for a pure
+    deletion the ratio falls below 0.5 once more than two-thirds of the
+    characters go, so "Provide [Verify quantity with the Owner and the AHJ
+    prior to bid] units." correctly cleaned to "Provide units." was reported
+    as an unexplained removal plus an invented paragraph.
+
+    Recognising the exact result does not widen what counts as permitted: an
+    output that is anything other than that exact text still has to satisfy
+    the similarity path below, unchanged.
+    """
+    expected = _expected_after_redaction(text, inline_patterns)
+
     for jdx in range(j1, j2):
         if jdx in paired:
             continue
         after = output_texts[jdx]
         if after == text:
             return jdx, []
+        if expected is not None and after == expected:
+            fragments = _removed_fragments(text, after) or []
+            return jdx, [f for f in fragments if f.strip()]
+
+    for jdx in range(j1, j2):
+        if jdx in paired:
+            continue
+        after = output_texts[jdx]
 
         fragments = _removed_fragments(text, after)
         if fragments is None:

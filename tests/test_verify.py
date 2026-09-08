@@ -222,6 +222,102 @@ class ClassificationTests(DocxTestCase):
         self.assertFalse(result.passed)
 
 
+class LongRedactionPairingTests(DocxTestCase):
+    """A correct redaction must pass however little of the paragraph survives."""
+
+    def test_a_long_placeholder_leaves_a_short_survivor(self):
+        # 14 characters survive out of 71.  For a pure deletion the similarity
+        # ratio is 2*len(after)/(len(before)+len(after)), which drops below
+        # 0.5 once more than two-thirds of the characters go — so this correct
+        # clean used to be reported as an unexplained removal plus an invented
+        # paragraph.
+        path = self.build(db.document(db.text_para(
+            "Provide [Verify quantity with the Owner and the AHJ prior to bid] units."
+        )))
+        engine = self.make_engine()
+        _, out = self.clean(path, engine)
+
+        self.assertEqual(self.paragraph_texts(out), ["Provide units."])
+
+        result = verify_clean(path, out, engine=engine)
+
+        self.assertTrue(result.passed, [r.text for r in result.unexpected_removals])
+        self.assertEqual(result.added, [])
+        self.assertEqual(result.removed, [])
+        self.assertEqual(len(result.expected_modifications), 1)
+        self.assertEqual(
+            result.expected_modifications[0].category, "inline_placeholder"
+        )
+
+    def test_a_paragraph_of_nothing_but_a_placeholder_still_follows_removal_rules(self):
+        path = self.build(db.document(
+            db.text_para("[Verify quantity with the Owner prior to bid]"),
+            db.text_para("A real requirement."),
+        ))
+        engine = self.make_engine()
+        _, out = self.clean(path, engine)
+        result = verify_clean(path, out, engine=engine)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(len(result.expected_removals), 1)
+        self.assertEqual(result.expected_removals[0].category, "inline_placeholder")
+
+    def test_an_unrelated_survivor_is_not_paired_by_the_exact_rule(self):
+        # The exact-result rule must not become a way to pair a removed
+        # paragraph with whatever else happens to be nearby.
+        path = self.build(db.document(
+            db.text_para("Provide [Verify quantity] units."),
+            db.text_para("An entirely different requirement."),
+        ))
+        engine = self.make_engine()
+        _, out = self.clean(path, engine)
+        result = verify_clean(path, out, engine=engine)
+
+        self.assertTrue(result.passed)
+        self.assertEqual(
+            self.paragraph_texts(out),
+            ["Provide units.", "An entirely different requirement."],
+        )
+
+
+class InjectedDamageTests(DocxTestCase):
+    """Damaged outputs built by hand, never by running the cleaner.
+
+    Agreement between a broken verifier and the cleaner that produced its
+    input proves nothing, so these construct both sides independently.
+    """
+
+    @unittest.expectedFailure
+    def test_v04_an_inline_match_must_not_excuse_an_extra_deleted_word(self):
+        """V04 — EXPECTED TO FAIL until W03 lands.
+
+        Deleting ``spare`` alongside ``[Verify quantity]`` is currently
+        accepted: ``_classify_modification`` asks whether the lost fragment
+        *contains* a pattern match, not whether matches *cover* it, so the
+        placeholder vouches for the requirement word beside it.
+
+        W03 replaces that predicate with interval coverage and removes this
+        decorator.  It is carried as an expected failure rather than a red
+        test so the suite stays green through W00-W02 and a genuine
+        regression is still visible; unittest reports an unexpected success
+        if the verdict ever changes, which is what makes this a tripwire in
+        both directions.
+        """
+        source = self.build(db.document(db.text_para(
+            "Provide two [Verify quantity] spare filters per unit."
+        )), name="v04_in.docx")
+        damaged = self.build(db.document(db.text_para(
+            "Provide two filters per unit."
+        )), name="v04_out.docx")
+
+        result = verify_clean(source, damaged, engine=self.make_engine())
+
+        self.assertFalse(
+            result.passed,
+            "losing 'spare' is not something an inline placeholder authorises",
+        )
+
+
 class StructuralTests(DocxTestCase):
     """The one layer that can see damage no pattern describes."""
 
