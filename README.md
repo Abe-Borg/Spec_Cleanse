@@ -247,6 +247,11 @@ Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds both
 assets on a Windows runner and attaches them to the release; the same workflow
 can be run manually against an existing tag from the Actions tab.
 
+The same workflow also runs on pull requests that touch the packaging or what
+goes into it. Those builds attach the two executables to the workflow run instead
+of to a release, so a broken build shows up before merge and the result can be
+downloaded and tried from the PR's Checks tab.
+
 To build locally on Windows:
 
 ```bat

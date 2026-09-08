@@ -5,7 +5,9 @@ name: Release
 # PyInstaller does not cross-compile, so this has to run on Windows. Pushing a
 # vX.Y.Z tag builds and uploads automatically; workflow_dispatch covers a
 # release that was already tagged before this workflow existed, and lets a build
-# be re-run without moving the tag.
+# be re-run without moving the tag. Pull requests touching the packaging or what
+# goes into it build too, but upload nothing to a release — the point there is to
+# find out the build is broken before merging, not after tagging.
 
 on:
   push:
@@ -17,6 +19,18 @@ on:
         description: "Existing tag to build and attach assets to (e.g. v1.0.0)"
         required: true
         type: string
+  # Build on any pull request that touches packaging or what gets packaged, so a
+  # broken build is caught before merge rather than at release time. Nothing is
+  # uploaded to a release on this path — the assets are attached to the workflow
+  # run, where they can be downloaded and tried.
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+      - "requirements.txt"
+      - "requirements-build.txt"
+      - "patterns.yaml"
+      - "*.py"
 
 permissions:
   contents: write
@@ -26,24 +40,39 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - name: Work out which tag is being built
+      - name: Work out what is being built
         id: version
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${GITHUB_REF#refs/tags/}"
-          fi
-          # The installer wants a bare version; the release wants the tag.
+          case "${{ github.event_name }}" in
+            workflow_dispatch)
+              tag="${{ inputs.tag }}"
+              version="${tag#v}"
+              checkout_ref="$tag"
+              ;;
+            pull_request)
+              # No tag exists; version the artifacts after the PR so they are
+              # obviously not a release build.
+              tag=""
+              version="0.0.0-pr${{ github.event.number }}"
+              checkout_ref=""
+              ;;
+            *)
+              tag="${GITHUB_REF#refs/tags/}"
+              version="${tag#v}"
+              checkout_ref="$tag"
+              ;;
+          esac
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
-          echo "Building ${tag}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${version}"
 
       - uses: actions/checkout@v4
         with:
-          # Build the tagged commit, not whatever master is at now.
-          ref: ${{ steps.version.outputs.tag }}
+          # A tag build takes the tagged commit, not whatever master is at now.
+          # Empty means the default ref, which is what a pull request wants.
+          ref: ${{ steps.version.outputs.checkout_ref }}
 
       - uses: actions/setup-python@v5
         with:
@@ -110,6 +139,8 @@ jobs:
           if-no-files-found: error
 
       - name: Attach the assets to the release
+        # Pull requests stop at the artifact above; only a tag produces a release.
+        if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash

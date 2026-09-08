@@ -287,7 +287,9 @@ Windows assets and attaches them. It runs on `windows-latest` because PyInstalle
 does not cross-compile — nothing in this repo can produce a Windows `.exe` from
 Linux or macOS. The workflow also accepts a `workflow_dispatch` with a tag name,
 which is how a release tagged before the workflow existed gets its assets, and
-how a build is retried without moving the tag.
+how a build is retried without moving the tag. It runs on pull requests touching
+the packaging or what goes into it as well, uploading to the workflow run rather
+than to a release, so a build break is found before merge.
 
 Two assets are produced: `SpecCleanse-<version>-portable.exe` (a single windowed
 executable) and `SpecCleanse-Setup-<version>.exe` (an Inno Setup installer that
