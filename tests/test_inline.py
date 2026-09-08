@@ -3,6 +3,7 @@
 import unittest
 
 from detection import ContentType
+from docx_xml import W_NS
 
 from tests import docx_builder as db
 from tests.support import DocxTestCase
@@ -65,6 +66,90 @@ class InlineRedactionTests(DocxTestCase):
 
         self.assertEqual(len(inline), 1)
         self.assertEqual(len(inline[0].spans), 1)
+
+
+class SeparatorRedactionTests(DocxTestCase):
+    """Separators render as characters, so a redaction can cover them.
+
+    The offset walk always counted them.  Only ``w:t`` was ever edited, so a
+    covered separator stayed behind as an orphan.
+    """
+
+    def test_non_breaking_hyphen_inside_a_placeholder_goes_with_it(self):
+        path = self.build(db.document(db.para(
+            db.run("Provide "),
+            db.run("[Verify quantity", inner="<w:noBreakHyphen/>"),
+            db.run("with Owner] units."),
+        )))
+        _, out = self.clean(path)
+
+        # Was "Provide -units."
+        self.assertEqual(self.paragraph_texts(out), ["Provide units."])
+        self.assertEqual(self.count_tags(out, "noBreakHyphen"), 0)
+
+    def test_tab_and_soft_break_inside_a_placeholder_go_with_it(self):
+        path = self.build(db.document(db.para(
+            db.run("Provide "),
+            db.run("[Verify", inner="<w:tab/>"),
+            db.run("quantity", inner="<w:br/>"),
+            db.run("with Owner] units."),
+        )))
+        _, out = self.clean(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Provide units."])
+        self.assertEqual(self.count_tags(out, "tab"), 0)
+        self.assertEqual(self.count_tags(out, "br"), 0)
+
+    def test_separators_outside_the_span_are_untouched(self):
+        path = self.build(db.document(db.para(
+            db.run("Sprinkler zone A"),
+            db.run("", inner="<w:tab/>"),
+            db.run("shall have [Verify quantity] heads."),
+        )))
+        _, out = self.clean(path)
+
+        self.assertEqual(
+            self.paragraph_texts(out), ["Sprinkler zone A\tshall have heads."]
+        )
+        self.assertEqual(self.count_tags(out, "tab"), 1)
+
+    def test_a_page_break_inside_a_placeholder_is_kept(self):
+        # A page break renders as "\n" and so can fall inside a match, but it
+        # is page setup, not content.  Removing it would reflow the document
+        # from that point on, which is a bigger claim than any pattern makes.
+        path = self.build(db.document(db.para(
+            db.run("Provide "),
+            db.run("[Verify quantity", inner='<w:br w:type="page"/>'),
+            db.run("with Owner] units."),
+        )))
+        result, out = self.clean(path)
+
+        self.assertEqual(self.count_tags(out, "br"), 1)
+        self.assertEqual(
+            self.root(out).find(f".//{{{W_NS}}}br").get(f"{{{W_NS}}}type"), "page"
+        )
+
+    def test_a_kept_layout_break_is_reported(self):
+        path = self.build(db.document(db.para(
+            db.run("Provide "),
+            db.run("[Verify quantity", inner='<w:br w:type="column"/>'),
+            db.run("with Owner] units."),
+        )))
+        result, _ = self.clean(path)
+
+        self.assertTrue(result.success, "a kept break is a warning, not an error")
+        self.assertEqual(len(result.warnings), 1)
+        self.assertIn("page or column break", result.warnings[0])
+        # The excerpt quotes the paragraph as it arrived, not half-redacted.
+        self.assertIn("Provide [Verify quantity with Owner] units.", result.warnings[0])
+
+    def test_an_ordinary_clean_warns_about_nothing(self):
+        path = self.build(db.document(
+            db.text_para("Provide two [Verify quantity with Owner] spare sprinklers."),
+        ))
+        result, _ = self.clean(path)
+
+        self.assertEqual(result.warnings, [])
 
 
 class PatternPrecisionTests(DocxTestCase):

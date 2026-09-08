@@ -158,6 +158,11 @@ def _clean_one(
         f" redacted {len(redacted)} inline placeholder(s),"
         f" preserved {len(preserved)}")
 
+    # Things kept on purpose, where removing them would have gone beyond
+    # removing content.  Not failures, and not a reason to withhold the file.
+    for warning in result.warnings:
+        log(f"    NOTE: {warning}")
+
     log("  Checking the output against the rules that produced it...")
     try:
         vresult = verify_clean(
