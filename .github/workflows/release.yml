@@ -1,0 +1,186 @@
+name: Release
+
+# Builds the Windows executable and installer and attaches them to a release.
+#
+# PyInstaller does not cross-compile, so this has to run on Windows. Pushing a
+# vX.Y.Z tag builds and uploads automatically; workflow_dispatch re-runs a build
+# against an existing tag without having to move it. Pull requests touching the
+# packaging or what goes into it build too, but upload nothing to a release — the
+# point there is to find out the build is broken before merging, not after
+# tagging.
+#
+# A tag can only be built if it contains the packaging, which is checked below.
+# Tags cut before it existed cannot be backfilled with assets.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach assets to (e.g. v1.0.0)"
+        required: true
+        type: string
+  # Build on any pull request that touches packaging or what gets packaged, so a
+  # broken build is caught before merge rather than at release time. Nothing is
+  # uploaded to a release on this path — the assets are attached to the workflow
+  # run, where they can be downloaded and tried.
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "packaging/**"
+      - "requirements.txt"
+      - "requirements-build.txt"
+      - "patterns.yaml"
+      - "*.py"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Work out what is being built
+        id: version
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            workflow_dispatch)
+              tag="${{ inputs.tag }}"
+              version="${tag#v}"
+              checkout_ref="$tag"
+              ;;
+            pull_request)
+              # No tag exists; version the artifacts after the PR so they are
+              # obviously not a release build.
+              tag=""
+              version="0.0.0-pr${{ github.event.number }}"
+              checkout_ref=""
+              ;;
+            *)
+              tag="${GITHUB_REF#refs/tags/}"
+              version="${tag#v}"
+              checkout_ref="$tag"
+              ;;
+          esac
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "checkout_ref=${checkout_ref}" >> "$GITHUB_OUTPUT"
+          echo "Building version ${version}"
+
+      - uses: actions/checkout@v4
+        with:
+          # A tag build takes the tagged commit, not whatever master is at now.
+          # Empty means the default ref, which is what a pull request wants.
+          ref: ${{ steps.version.outputs.checkout_ref }}
+
+      - name: Check this ref contains the packaging
+        # A tag build populates the workspace from that tag alone. A tag cut
+        # before the packaging existed has none of the files below, and the
+        # dependency step would fail with a confusing pip error instead of
+        # saying why. Fail here with the reason.
+        shell: bash
+        run: |
+          missing=""
+          for f in requirements-build.txt packaging/speccleanse.spec \
+                   packaging/installer.iss apppaths.py; do
+            [ -f "$f" ] || missing="${missing} ${f}"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Ref '${{ steps.version.outputs.checkout_ref }}' is missing:${missing}"
+            echo ""
+            echo "Assets can only be built from a commit that contains the build"
+            echo "tooling. A tag predating it cannot be built here — and should not"
+            echo "be: it also predates the fix for patterns.yaml being read from"
+            echo "PyInstaller's temporary extraction directory, so the executable"
+            echo "would ship a build whose pattern edits silently do nothing."
+            echo "Cut a new tag from a commit that has the packaging instead."
+            exit 1
+          fi
+          echo "Packaging present."
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Run tests
+        # Windows has tkinter, so the GUI tests that skip on Linux run here.
+        run: python -m unittest discover -s tests -t .
+
+      - name: Build the executable
+        run: pyinstaller packaging/speccleanse.spec --noconfirm
+
+      - name: Check the executable was produced
+        shell: bash
+        run: |
+          test -f dist/SpecCleanse.exe || { echo "PyInstaller produced no exe"; exit 1; }
+          ls -lh dist/SpecCleanse.exe
+
+      - name: Locate Inno Setup
+        id: iscc
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "Inno Setup not present on the runner; installing it."
+            choco install innosetup --no-progress -y
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "Could not find ISCC.exe after installing Inno Setup" }
+          Write-Host "Using $iscc"
+          "path=$iscc" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build the installer
+        run: >
+          & "${{ steps.iscc.outputs.path }}"
+          /DAppVersion=${{ steps.version.outputs.version }}
+          packaging\installer.iss
+        shell: pwsh
+
+      - name: Name the portable executable after its version
+        shell: bash
+        run: |
+          cp dist/SpecCleanse.exe "dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe"
+          ls -lh dist/
+
+      - name: Upload build artifacts
+        # Kept regardless of whether the release upload below succeeds, so a
+        # failed upload does not mean rebuilding.
+        uses: actions/upload-artifact@v4
+        with:
+          name: speccleanse-windows-${{ steps.version.outputs.version }}
+          path: |
+            dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe
+            dist/SpecCleanse-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Attach the assets to the release
+        # Pull requests stop at the artifact above; only a tag produces a release.
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          # The release may not exist yet when a tag is pushed on its own.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "No release for $tag yet — creating one from the tag."
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" \
+            "dist/SpecCleanse-${version}-portable.exe" \
+            "dist/SpecCleanse-Setup-${version}.exe" \
+            --clobber

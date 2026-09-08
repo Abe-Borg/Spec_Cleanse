@@ -33,17 +33,49 @@ Every clean run is followed by an automatic verification pass (see [Verification
 
 ## Installation
 
-### Requirements
+### Windows: installer or portable executable
 
-- Python 3.10+
-- Tkinter-capable Python environment
+Download either from the [latest release](https://github.com/Abe-Borg/Spec_Cleanse/releases/latest):
 
-### Setup
+| Asset | Use it when |
+|-------|-------------|
+| `SpecCleanse-Setup-<version>.exe` | You want it installed, with a Start Menu entry and an uninstaller |
+| `SpecCleanse-<version>-portable.exe` | You want to run it from a folder or a network share with nothing installed |
+
+The installer is per-user: it writes to `%LOCALAPPDATA%\Programs\SpecCleanse`,
+needs no administrator rights, and asks for no elevation prompt. Neither build
+requires Python — everything is bundled.
+
+Both are unsigned, so Windows SmartScreen will warn the first time you run one.
+Choose **More info → Run anyway**, or have whoever manages your machines
+whitelist it.
+
+### Running from source
 
 ```bash
 pip install -r requirements.txt
 python gui.py
 ```
+
+Requires Python 3.10+ in a Tkinter-capable environment.
+
+### Where patterns.yaml lives
+
+Editing `patterns.yaml` is the supported way to add detection patterns, so an
+installed build keeps an editable copy outside the executable:
+
+| How you run it | File it reads |
+|----------------|---------------|
+| From source | `patterns.yaml` beside the modules |
+| Installed or portable | `patterns.yaml` beside the `.exe`, if you put one there |
+| Installed or portable, otherwise | `%APPDATA%\SpecCleanse\patterns.yaml`, created from the shipped defaults on first run |
+
+The app logs the file it loaded as its first line — `Patterns: <path>` — so
+there is no guessing about which copy is in effect.
+
+Dropping a `patterns.yaml` next to the executable overrides the per-user copy,
+which is the simpler arrangement when a team shares one tuned pattern set from a
+network folder.
 
 ## Usage (GUI)
 
@@ -186,8 +218,10 @@ Spec_Cleanse/
 ├── processor.py        # Unpack, remove, redact, repack
 ├── verify.py           # Input/output comparison and structural lint
 ├── docx_xml.py         # Shared WordprocessingML plumbing and config loading
+├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
 ├── requirements.txt
+├── requirements-build.txt
 ├── tests/
 │   ├── docx_builder.py # Synthetic .docx fixtures
 │   ├── support.py      # Shared test-case base
@@ -196,10 +230,45 @@ Spec_Cleanse/
 │   ├── style_cleaner.py
 │   ├── deep_cleaner.py
 │   └── README.md
+├── packaging/
+│   ├── speccleanse.spec  # PyInstaller build
+│   └── installer.iss     # Inno Setup installer
+├── .github/workflows/
+│   └── release.yml     # Builds and attaches release assets on a tag
 ├── README.md
 ├── CHANGELOG.md
 └── LICENSE.md
 ```
+
+## Building the Windows executable
+
+PyInstaller does not cross-compile, so a Windows build has to happen on Windows.
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, which builds both
+assets on a Windows runner and attaches them to the release; the same workflow
+can be re-run manually against an existing tag from the Actions tab.
+
+Only tags that contain the packaging can be built. `v1.0.0` predates it and has
+no assets: it also predates the fix for `patterns.yaml` being read out of
+PyInstaller's temporary extraction directory, so an executable built from that
+tag would ship a build whose pattern edits silently do nothing. The workflow
+checks for the build tooling after checkout and stops with that explanation
+rather than failing obscurely later.
+
+The same workflow also runs on pull requests that touch the packaging or what
+goes into it. Those builds attach the two executables to the workflow run instead
+of to a release, so a broken build shows up before merge and the result can be
+downloaded and tried from the PR's Checks tab.
+
+To build locally on Windows:
+
+```bat
+pip install -r requirements.txt -r requirements-build.txt
+pyinstaller packaging\speccleanse.spec --noconfirm
+iscc /DAppVersion=1.0.0 packaging\installer.iss
+```
+
+Both land in `dist\`. The installer step needs [Inno Setup 6](https://jrsoftware.org/isdl.php);
+skip it if you only want the portable executable.
 
 ## Releases
 
