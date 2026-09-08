@@ -66,7 +66,11 @@ ordinary clean leaves it in the file along with its revision markup, where a
 downstream LLM may well read it back. With this option on, SpecCleanse accepts
 every tracked change (insertions keep their text, deletions go), removes comment
 anchors, and deletes the comment parts of the package along with their
-relationships and content-type entries.
+relationships, sidecar `.rels`, and content-type entries.
+
+Deleted table rows and cells are a special case worth knowing about: their text is
+not marked up at all — it stays ordinary text, and only a marker in the row's
+properties records the deletion — so they are removed whole.
 
 A tracked deletion of a *paragraph mark* is left alone: merging the two paragraphs
 would move content you never asked to move.
@@ -122,6 +126,10 @@ firm's own style derived from either are all recognised. A style that declares
 `w:vanish` marks its text hidden — which is how MasterSpec hides its notes — unless
 a run un-hides itself with `<w:vanish w:val="0"/>`.
 
+Hidden is a *toggle* property, so declarations along a `w:basedOn` chain cancel
+rather than accumulate: a style that repeats its base style's `w:vanish` is
+rendered visible by Word, and SpecCleanse leaves that text alone.
+
 `style_based_detection.preserve_styles` protects headings whose text alone gives
 nothing away: MasterSpec numbers parts automatically, so the heading "PART 1 -
 GENERAL" extracts as just "GENERAL". A paragraph in one of those styles is
@@ -133,9 +141,11 @@ placeholders that need redacting live.
 
 After cleaning, SpecCleanse compares the input and output and reports:
 
-- **Removed paragraphs** — classified as expected (matched a rule or an editorial
-  formatting signal), unexpected (nothing accounts for the loss), or a preserve
-  violation (content that should never be removed).
+- **Removed paragraphs** — classified as expected (matched a rule, an editorial
+  formatting signal, or an accepted tracked deletion), unexpected (nothing accounts
+  for the loss), or a preserve violation (content that should never be removed).
+  An inline placeholder inside a paragraph never explains losing the whole
+  paragraph; only a paragraph that is nothing but placeholders does.
 - **Modified paragraphs** — a paragraph that survived but lost text, with each lost
   fragment classified the same way. Inline redactions land here. A change that is
   not a pure deletion is never expected: if the text was altered rather than

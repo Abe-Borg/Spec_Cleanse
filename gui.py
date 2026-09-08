@@ -149,7 +149,9 @@ def _clean_one(
             f" preserved {len(preserved)}")
 
         log("  Verifying no spec content was lost...")
-        vresult = verify_clean(input_path, output_path, engine=engine)
+        vresult = verify_clean(
+            input_path, output_path, engine=engine, strip_revisions=strip_revisions
+        )
         _log_verification(vresult, log)
 
         log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"

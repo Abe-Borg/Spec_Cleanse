@@ -39,8 +39,10 @@ from docx_xml import (
     block_children,
     collect_content_parts,
     field_chars_balanced,
+    cut_spans,
     fold_style_names,
     is_on,
+    merge_spans,
     iter_own_runs,
     iter_paragraphs,
     load_config,
@@ -49,6 +51,7 @@ from docx_xml import (
     paragraph_text,
     parse_xml,
     run_text,
+    tidy_spans,
     toggle_on,
 )
 
@@ -72,6 +75,8 @@ MIN_PAIR_SIMILARITY = 0.5
 
 PRESERVE_VIOLATION = "preserve_violation"
 FORMATTING_BASED = "formatting_based"
+INLINE_PLACEHOLDER = "inline_placeholder"
+TRACKED_DELETION = "tracked_deletion"
 
 
 # =============================================================================
@@ -86,7 +91,23 @@ class ParagraphInfo:
     is_italic: bool = False
     has_editorial_color: bool = False
     is_hidden: bool = False
+    #: True if a tracked change marks this paragraph's container as deleted —
+    #: a deleted table row keeps its text in plain w:t, so nothing else shows it.
+    in_tracked_deletion: bool = False
+    #: Text of runs carrying a strong editorial signal — hidden, or an
+    #: editorial style.  Trusted whatever the formatting-only switch says.
     editorial_run_texts: list[str] = field(default_factory=list)
+    #: Text of runs that are only italic in an editorial colour.  Trusted
+    #: exactly when specifier_notes.formatting_only_removal is on.
+    formatting_only_run_texts: list[str] = field(default_factory=list)
+
+    def run_text_explains(self, fragment: str, trust_formatting_only: bool) -> bool:
+        """True if a lost fragment came from a run whose formatting justifies it."""
+        candidates = list(self.editorial_run_texts)
+        if trust_formatting_only:
+            candidates += self.formatting_only_run_texts
+        stripped = fragment.strip()
+        return bool(stripped) and any(stripped in run for run in candidates)
 
     def formatting_signals(self, trust_formatting_only: bool) -> list[str]:
         """Names of the editorial formatting signals this paragraph carries.
@@ -261,6 +282,23 @@ def extract_paragraphs(docx_path: Path, config: dict) -> list[ParagraphInfo]:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+def _in_tracked_deletion(para: etree._Element) -> bool:
+    """True if a tracked change marks the row or cell holding this paragraph.
+
+    Run-level deletions hide their text in ``w:delText``, which no extractor
+    reads, so they never reach the comparison.  A deleted *row* is different:
+    its text stays ordinary ``w:t`` and only ``w:trPr`` records the deletion.
+    """
+    node = para
+    while node is not None:
+        if node.tag == f"{W}tr" and node.find(f"{W}trPr/{W}del") is not None:
+            return True
+        if node.tag == TC_TAG and node.find(f"{W}tcPr/{W}cellDel") is not None:
+            return True
+        node = node.getparent()
+    return False
+
+
 def _describe_paragraph(
     para: etree._Element,
     styles: StyleIndex,
@@ -274,6 +312,7 @@ def _describe_paragraph(
     runs_with_text = 0
     italic_runs = 0
     editorial_run_texts: list[str] = []
+    formatting_only_run_texts: list[str] = []
 
     para_style = None
     ppr = para.find(f"{W}pPr")
@@ -317,8 +356,10 @@ def _describe_paragraph(
         is_hidden |= run_hidden
         has_editorial_style |= run_styled
 
-        if run_hidden or run_styled or (run_italic and run_colored):
+        if run_hidden or run_styled:
             editorial_run_texts.append(text)
+        elif run_italic and run_colored:
+            formatting_only_run_texts.append(text)
 
     return ParagraphInfo(
         text=paragraph_text(para).strip(),
@@ -326,7 +367,9 @@ def _describe_paragraph(
         is_italic=runs_with_text > 0 and italic_runs == runs_with_text,
         has_editorial_color=has_editorial_color,
         is_hidden=is_hidden,
+        in_tracked_deletion=_in_tracked_deletion(para),
         editorial_run_texts=editorial_run_texts,
+        formatting_only_run_texts=formatting_only_run_texts,
     )
 
 
@@ -422,6 +465,30 @@ def _matches_preserve(text: str, preserve_patterns) -> str | None:
     return None
 
 
+def _placeholders_only(text: str, inline_patterns) -> str | None:
+    """The pattern that explains a paragraph made of nothing but placeholders.
+
+    An inline pattern matching somewhere in a paragraph is not a licence to
+    lose the paragraph — that is the whole point of the inline tier.  It
+    justifies a whole-paragraph removal only when cutting every placeholder
+    out leaves no text behind, which is the same test the processor applies
+    before removing such a paragraph itself.
+    """
+    spans: list[tuple[int, int]] = []
+    matched: list[str] = []
+    for pattern in inline_patterns:
+        for match in pattern.finditer(text):
+            if match.end() > match.start():
+                spans.append((match.start(), match.end()))
+                matched.append(pattern.pattern)
+
+    if not spans:
+        return None
+    if cut_spans(text, tidy_spans(text, merge_spans(spans))).strip():
+        return None
+    return "; ".join(dict.fromkeys(matched))
+
+
 def _removed_fragments(before: str, after: str) -> list[str] | None:
     """Fragments cut from ``before`` to make ``after``.
 
@@ -449,6 +516,7 @@ def verify_clean(
     output_path: Path,
     config_path: Path | None = None,
     engine: DetectionEngine | None = None,
+    strip_revisions: bool = False,
 ) -> VerificationResult:
     """Compare input and output DOCX files, classifying every difference.
 
@@ -459,6 +527,8 @@ def verify_clean(
         engine:      The engine that did the cleaning.  Passing it keeps
                      verification and detection on one set of patterns; if it
                      is omitted an equivalent engine is built from the config.
+        strip_revisions: Whether the clean was asked to accept tracked changes.
+                     Text lost to a tracked deletion is expected only then.
 
     Returns:
         VerificationResult with every removal, modification, and structural
@@ -470,7 +540,11 @@ def verify_clean(
     if engine is None:
         engine = DetectionEngine(config)
 
-    removal_patterns = engine.removal_patterns()
+    # Whole-paragraph removals are judged without the inline tier: a
+    # placeholder inside a paragraph never justifies losing the paragraph.
+    removal_patterns = engine.removal_patterns(include_inline=False)
+    fragment_patterns = engine.removal_patterns()
+    inline_patterns = engine.inline_patterns()
     preserve_patterns = engine.preserve_patterns()
     trust_formatting_only = config.get("specifier_notes", {}).get(
         "formatting_only_removal", True
@@ -505,7 +579,12 @@ def verify_clean(
             if match is None:
                 result.removed.append(
                     _classify_removal(
-                        info, removal_patterns, preserve_patterns, trust_formatting_only
+                        info,
+                        removal_patterns,
+                        inline_patterns,
+                        preserve_patterns,
+                        trust_formatting_only,
+                        strip_revisions,
                     )
                 )
                 continue
@@ -516,7 +595,7 @@ def verify_clean(
                 result.modified.append(
                     _classify_modification(
                         info, output_texts[jdx], fragments,
-                        removal_patterns, preserve_patterns,
+                        fragment_patterns, preserve_patterns, trust_formatting_only,
                     )
                 )
 
@@ -558,15 +637,32 @@ def _pair_with_survivor(
 def _classify_removal(
     info: ParagraphInfo,
     removal_patterns,
+    inline_patterns,
     preserve_patterns,
     trust_formatting_only: bool,
+    strip_revisions: bool = False,
 ) -> RemovedParagraph:
-    """Decide whether a vanished paragraph was meant to vanish."""
+    """Decide whether a vanished paragraph was meant to vanish.
+
+    ``removal_patterns`` here excludes the inline tier; those are asked the
+    narrower question in :func:`_placeholders_only`.
+    """
     preserve_match = _matches_preserve(info.text, preserve_patterns)
     if preserve_match is not None:
         return RemovedParagraph(info.text, PRESERVE_VIOLATION, preserve_match)
 
+    if strip_revisions and info.in_tracked_deletion:
+        return RemovedParagraph(
+            info.text, TRACKED_DELETION, "accepted a tracked deletion"
+        )
+
     category, pattern = _match_patterns(info.text, removal_patterns)
+
+    if category is None:
+        placeholder_match = _placeholders_only(info.text, inline_patterns)
+        if placeholder_match is not None:
+            category, pattern = INLINE_PLACEHOLDER, placeholder_match
+
     if category is None:
         signals = info.formatting_signals(trust_formatting_only)
         if signals:
@@ -581,6 +677,7 @@ def _classify_modification(
     fragments: list[str],
     removal_patterns,
     preserve_patterns,
+    trust_formatting_only: bool,
 ) -> ModifiedParagraph:
     """Decide whether the text a surviving paragraph lost was meant to go.
 
@@ -596,9 +693,7 @@ def _classify_modification(
             )
 
         category, pattern = _match_patterns(fragment, removal_patterns)
-        if category is None and any(
-            fragment in run for run in info.editorial_run_texts
-        ):
+        if category is None and info.run_text_explains(fragment, trust_formatting_only):
             category, pattern = FORMATTING_BASED, "editorial run formatting"
         verdicts.append((category, pattern))
 

@@ -170,6 +170,40 @@ def comment_anchor(comment_id: str = "1") -> str:
     )
 
 
+COMMENTS_RELS = XML_HEAD + (
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId1" '
+    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+    'Target="media/image1.png"/>'
+    '</Relationships>'
+)
+
+
+def deleted_row(*cells: str) -> str:
+    """A table row whose deletion is tracked in w:trPr — its text stays plain."""
+    tcs = "".join(f"<w:tc><w:tcPr/>{cell}</w:tc>" for cell in cells)
+    return (
+        '<w:tr><w:trPr>'
+        '<w:del w:id="95" w:author="Editor" w:date="2026-01-01T00:00:00Z"/>'
+        f'</w:trPr>{tcs}</w:tr>'
+    )
+
+
+def row(*cells: str) -> str:
+    """A plain table row."""
+    tcs = "".join(f"<w:tc><w:tcPr/>{cell}</w:tc>" for cell in cells)
+    return f"<w:tr>{tcs}</w:tr>"
+
+
+def table_of(*rows: str) -> str:
+    """A table built from pre-made rows."""
+    return (
+        '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="5000"/></w:tblGrid>'
+        + "".join(rows)
+        + "</w:tbl>"
+    )
+
+
 def comments(*bodies: str) -> str:
     """Build ``word/comments.xml``."""
     entries = "".join(
@@ -227,13 +261,16 @@ def style_def(
     style_id: str,
     name: str | None = None,
     based_on: str | None = None,
-    hidden: bool = False,
+    hidden: bool | None = None,
     style_type: str = "paragraph",
 ) -> str:
+    """Build a ``w:style``.  ``hidden`` is three-valued, like ``w:vanish``:
+    True declares hidden, False declares ``w:val="0"``, None says nothing."""
+    vanish = "" if hidden is None else _toggle("vanish", hidden)
     parts = [
         f'<w:name w:val="{name if name is not None else style_id}"/>',
         f'<w:basedOn w:val="{based_on}"/>' if based_on else "",
-        "<w:rPr><w:vanish/></w:rPr>" if hidden else "",
+        f"<w:rPr>{vanish}</w:rPr>" if vanish else "",
     ]
     return (
         f'<w:style w:type="{style_type}" w:styleId="{style_id}">'

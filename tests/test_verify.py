@@ -106,6 +106,79 @@ class ClassificationTests(DocxTestCase):
         self.assertEqual(result.modified[0].category, "inline_placeholder")
         self.assertTrue(result.passed)
 
+    def test_losing_a_whole_paragraph_to_an_inline_pattern_is_unexpected(self):
+        """An inline placeholder never excuses losing the requirement around it."""
+        source = self.build(db.document(
+            db.text_para("Provide two [Verify quantity] spare sprinklers."),
+            db.text_para("Other requirement."),
+        ))
+        cleaned = self.build(
+            db.document(db.text_para("Other requirement.")), name="hand_cleaned.docx"
+        )
+        result = verify_clean(source, cleaned, engine=self.make_engine())
+
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+        self.assertFalse(result.passed)
+
+    def test_a_paragraph_of_only_placeholders_may_be_removed_whole(self):
+        source = self.build(db.document(
+            db.text_para("[Insert product name]"),
+            db.text_para("Other requirement."),
+        ))
+        cleaned = self.build(
+            db.document(db.text_para("Other requirement.")), name="hand_cleaned.docx"
+        )
+        result = verify_clean(source, cleaned, engine=self.make_engine())
+
+        self.assertEqual(len(result.expected_removals), 1)
+        self.assertEqual(result.removed[0].category, "inline_placeholder")
+        self.assertTrue(result.passed)
+
+    def test_a_trimmed_editorial_run_is_expected_while_the_switch_is_on(self):
+        source = self.build(db.document(
+            db.para(
+                db.run("Keep this. "),
+                db.run("Red italic aside.", italic=True, color="FF0000"),
+            ),
+        ))
+        cleaned = self.build(
+            db.document(db.text_para("Keep this.")), name="hand_cleaned.docx"
+        )
+        result = verify_clean(source, cleaned, engine=self.make_engine())
+
+        self.assertEqual(len(result.expected_modifications), 1, result.modified)
+        self.assertTrue(result.passed)
+
+    def test_a_trimmed_editorial_run_is_flagged_when_the_switch_is_off(self):
+        """The switch has to govern trims too, not just whole-paragraph losses."""
+        source = self.build(db.document(
+            db.para(
+                db.run("Keep this. "),
+                db.run("Red italic aside.", italic=True, color="FF0000"),
+            ),
+        ))
+        cleaned = self.build(
+            db.document(db.text_para("Keep this.")), name="hand_cleaned.docx"
+        )
+        engine = self.make_engine(specifier_notes={"formatting_only_removal": False})
+        result = verify_clean(source, cleaned, engine=engine)
+
+        self.assertEqual(len(result.unexpected_modifications), 1, result.modified)
+        self.assertFalse(result.passed)
+
+    def test_a_trimmed_hidden_run_is_expected_either_way(self):
+        source = self.build(db.document(
+            db.para(db.run("Keep this. "), db.run("Hidden aside.", vanish=True)),
+        ))
+        cleaned = self.build(
+            db.document(db.text_para("Keep this.")), name="hand_cleaned.docx"
+        )
+        engine = self.make_engine(specifier_notes={"formatting_only_removal": False})
+        result = verify_clean(source, cleaned, engine=engine)
+
+        self.assertEqual(len(result.expected_modifications), 1, result.modified)
+        self.assertTrue(result.passed)
+
     def test_preserve_violation_is_reported(self):
         source = self.build(db.document(
             db.text_para("PART 1 - GENERAL"),

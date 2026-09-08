@@ -84,6 +84,53 @@ class HiddenStyleTests(DocxTestCase):
 
         self.assertEqual(self.paragraph_texts(out), ["Visible in a hidden style."])
 
+    def test_a_style_repeating_its_base_vanish_toggles_hidden_back_off(self):
+        """w:vanish is a toggle: two declarations in a chain cancel, and Word
+        renders that text normally."""
+        styles = db.styles(
+            db.style_def("BaseHidden", name="Base Hidden", hidden=True),
+            db.style_def("DerivedNote", name="Derived Note",
+                         based_on="BaseHidden", hidden=True),
+        )
+        path = self.build(
+            db.document(db.text_para("Visible requirement.", style="DerivedNote")),
+            {"word/styles.xml": styles},
+        )
+        _, out = self.clean(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Visible requirement."])
+
+    def test_three_declarations_in_a_chain_are_hidden_again(self):
+        styles = db.styles(
+            db.style_def("A", name="A", hidden=True),
+            db.style_def("B", name="B", based_on="A", hidden=True),
+            db.style_def("C", name="C", based_on="B", hidden=True),
+        )
+        path = self.build(
+            db.document(
+                db.text_para("Real requirement."),
+                db.text_para("Hidden note.", style="C"),
+            ),
+            {"word/styles.xml": styles},
+        )
+        _, out = self.clean(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Real requirement."])
+
+    def test_an_explicit_val_zero_in_the_chain_means_visible(self):
+        styles = db.styles(
+            db.style_def("BaseHidden", name="Base Hidden", hidden=True),
+            db.style_def("ShownNote", name="Shown Note",
+                         based_on="BaseHidden", hidden=False),
+        )
+        path = self.build(
+            db.document(db.text_para("Visible requirement.", style="ShownNote")),
+            {"word/styles.xml": styles},
+        )
+        _, out = self.clean(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Visible requirement."])
+
     def test_hidden_style_detection_needs_the_styles_part(self):
         """Without styles.xml there is nothing to inherit from — and no false hit."""
         path = self.build(db.document(

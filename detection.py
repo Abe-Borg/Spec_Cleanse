@@ -610,13 +610,18 @@ class DetectionEngine:
             for d in detections
         )
 
-    def removal_patterns(self) -> list[tuple[str, re.Pattern]]:
+    def removal_patterns(self, include_inline: bool = True) -> list[tuple[str, re.Pattern]]:
         """Every removal pattern as ``(category, compiled)``, in detector order.
 
         Verification classifies removals against exactly the patterns that
         caused them, so a correct low-confidence or inline removal is never
         reported as unexpected just because verification compiled a different
         list from the same file.
+
+        ``include_inline=False`` leaves out the inline tier.  Those patterns
+        never justify losing a whole paragraph — matching one only means the
+        paragraph *contained* a placeholder — so whoever judges a
+        whole-paragraph removal has to ask a different question of them.
         """
         patterns: list[tuple[str, re.Pattern]] = []
         for detector in self.detectors:
@@ -627,9 +632,19 @@ class DetectionEngine:
                 patterns.append((category, pattern))
             for pattern in detector.compiled_low_confidence_patterns:
                 patterns.append((category, pattern))
-            for pattern in detector.config.inline_patterns:
-                patterns.append((ContentType.INLINE_PLACEHOLDER.value, pattern))
+            if include_inline:
+                for pattern in detector.config.inline_patterns:
+                    patterns.append((ContentType.INLINE_PLACEHOLDER.value, pattern))
         return patterns
+
+    def inline_patterns(self) -> list[re.Pattern]:
+        """Compiled inline placeholder patterns, across every enabled detector."""
+        return [
+            pattern
+            for detector in self.detectors
+            if detector.config.enabled
+            for pattern in detector.config.inline_patterns
+        ]
 
     def preserve_patterns(self) -> list[re.Pattern]:
         """Compiled preserve patterns — content that must never be removed."""

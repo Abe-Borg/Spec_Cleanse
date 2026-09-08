@@ -3,6 +3,8 @@
 import unittest
 import zipfile
 
+from processor import DocxProcessor
+
 from tests import docx_builder as db
 from tests.support import DocxTestCase
 
@@ -42,8 +44,6 @@ class StripRevisionsTests(DocxTestCase):
     """On: insertions are kept, deletions and comments go."""
 
     def clean_stripped(self, path):
-        from processor import DocxProcessor
-
         output_path = self.temp_dir / "stripped.docx"
         processor = DocxProcessor(self.make_engine(), strip_revisions=True)
         result = processor.process(path, output_path)
@@ -78,6 +78,60 @@ class StripRevisionsTests(DocxTestCase):
 
         self.assertNotIn("comments.xml", self.part(out, "word/_rels/document.xml.rels"))
         self.assertNotIn("comments.xml", self.part(out, "[Content_Types].xml"))
+
+    def test_a_deleted_table_row_is_removed_with_its_text(self):
+        """A deleted row records the deletion in w:trPr; its text stays plain w:t."""
+        path = self.build(db.document(db.table_of(
+            db.deleted_row(db.text_para("Row the editor deleted.")),
+            db.row(db.text_para("Row the editor kept.")),
+        )))
+        out = self.clean_stripped(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Row the editor kept."])
+
+    def test_a_deleted_table_cell_is_removed(self):
+        path = self.build(db.document(db.table_of(
+            '<w:tr>'
+            '<w:tc><w:tcPr><w:cellDel w:id="96" w:author="E" w:date="2026-01-01T00:00:00Z"/>'
+            '</w:tcPr>' + db.text_para("Deleted cell.") + '</w:tc>'
+            '<w:tc><w:tcPr/>' + db.text_para("Kept cell.") + '</w:tc>'
+            '</w:tr>'
+        )))
+        out = self.clean_stripped(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Kept cell."])
+
+    def test_the_comment_parts_sidecar_rels_go_too(self):
+        """A comment holding an image has its own .rels; orphaning it is invalid OPC."""
+        path = self.build(DOCUMENT, dict(
+            PARTS, **{"word/_rels/comments.xml.rels": db.COMMENTS_RELS}
+        ))
+        out = self.clean_stripped(path)
+
+        with zipfile.ZipFile(out) as zf:
+            names = zf.namelist()
+        self.assertNotIn("word/_rels/comments.xml.rels", names)
+        self.assertIn("word/_rels/document.xml.rels", names)
+
+    def test_verification_accounts_for_the_accepted_deletion(self):
+        """The report must judge the run it was asked for, not cry wolf about it."""
+        from verify import verify_clean
+
+        path = self.build(db.document(db.table_of(
+            db.deleted_row(db.text_para("Row the editor deleted.")),
+            db.row(db.text_para("Row the editor kept.")),
+        )))
+        engine = self.make_engine()
+        out = self.temp_dir / "stripped.docx"
+        DocxProcessor(engine, strip_revisions=True).process(path, out)
+
+        accepted = verify_clean(path, out, engine=engine, strip_revisions=True)
+        self.assertTrue(accepted.passed, accepted.removed)
+        self.assertEqual(accepted.removed[0].category, "tracked_deletion")
+
+        # Judged as an ordinary clean, the same loss is unexplained.
+        plain = verify_clean(path, out, engine=engine)
+        self.assertEqual(len(plain.unexpected_removals), 1)
 
     def test_a_document_without_revisions_is_unharmed(self):
         path = self.build(db.document(db.text_para("Plain requirement.")))

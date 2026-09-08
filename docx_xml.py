@@ -494,16 +494,52 @@ def _remove_all(root: etree._Element, tags) -> int:
     return removed
 
 
+def _accept_structural_deletions(root: etree._Element) -> int:
+    """Remove table rows and cells that a tracked change marks as deleted.
+
+    A deleted row keeps its text in ordinary ``w:t`` and records the deletion
+    as a marker in ``w:trPr``; dropping only the marker would accept the row
+    back into the document with its content intact, which is the opposite of
+    accepting the deletion.  Cells work the same way through ``w:cellDel``.
+    """
+    changed = 0
+
+    for marker_tag, properties_tag, container_tag in (
+        (f"{W}del", f"{W}trPr", f"{W}tr"),
+        (f"{W}cellDel", f"{W}tcPr", TC_TAG),
+    ):
+        for marker in list(root.iter(marker_tag)):
+            properties = marker.getparent()
+            if properties is None or properties.tag != properties_tag:
+                continue
+            container = properties.getparent()
+            if container is None or container.tag != container_tag:
+                continue
+            row = container.getparent() if container_tag == TC_TAG else None
+            if container.getparent() is not None:
+                container.getparent().remove(container)
+                changed += 1
+            # A row emptied of every cell is no longer a row.
+            if row is not None and row.getparent() is not None:
+                if not any(child.tag == TC_TAG for child in row):
+                    row.getparent().remove(row)
+
+    return changed
+
+
 def accept_revisions(root: etree._Element) -> int:
     """Accept every tracked change in one XML part.
 
     Insertions keep their content and lose the revision wrapper; deletions go
     with their ``w:delText``, which no text extractor can see and which
-    therefore survives an ordinary clean along with its markup.  A deleted
-    paragraph *mark* is not acted on — the paragraphs stay separate — because
-    merging them would move content the user never asked to move.
+    therefore survives an ordinary clean along with its markup.  Deleted table
+    rows and cells go whole, since their text is not marked up at all.  A
+    deleted paragraph *mark* is the one thing not acted on — the paragraphs
+    stay separate — because merging them would move content the user never
+    asked to move.
     """
-    changed = _remove_all(root, REVISION_DELETE_TAGS)
+    changed = _accept_structural_deletions(root)
+    changed += _remove_all(root, REVISION_DELETE_TAGS)
 
     for tag in REVISION_UNWRAP_TAGS:
         for elem in list(root.iter(tag)):
@@ -523,7 +559,8 @@ def remove_comment_parts(unpacked_dir: Path) -> list[str]:
     """Delete the comment parts of a package, with their bookkeeping.
 
     A part left listed in the relationships or the content types after its
-    file is gone is a package Word will not open, so both are updated.
+    file is gone is a package Word will not open, so both are updated, along
+    with each part's own sidecar ``.rels``.
     """
     word_dir = unpacked_dir / "word"
     removed = [name for name in COMMENT_PARTS if (word_dir / name).exists()]
@@ -532,6 +569,12 @@ def remove_comment_parts(unpacked_dir: Path) -> list[str]:
 
     for name in removed:
         (word_dir / name).unlink()
+        # A part's own relationships live in a sidecar named after it — a
+        # comment holding an image or a hyperlink has one.  Left behind, it
+        # relates to a part that no longer exists, which is an invalid package.
+        sidecar = word_dir / "_rels" / f"{name}.rels"
+        if sidecar.exists():
+            sidecar.unlink()
 
     rels_path = word_dir / "_rels" / "document.xml.rels"
     if rels_path.exists():
@@ -603,11 +646,17 @@ def write_xml(tree: etree._ElementTree, path: Path) -> None:
 
 @dataclass
 class StyleInfo:
-    """One entry from ``word/styles.xml``."""
+    """One entry from ``word/styles.xml``.
+
+    ``vanish`` is three-valued: True when the style declares hidden, False when
+    it declares ``w:val="0"``, and None when it says nothing at all.  The three
+    are not interchangeable — ``w:vanish`` is a *toggle* property, so a
+    declaration means something different from silence.
+    """
     style_id: str
     name: str = ""
     based_on: str | None = None
-    hidden: bool = False
+    vanish: bool | None = None
     style_type: str = ""
 
 
@@ -635,12 +684,13 @@ def load_styles(word_dir: Path) -> dict[str, StyleInfo]:
         name_elem = style.find(f"{W}name")
         based_on_elem = style.find(f"{W}basedOn")
         rpr = style.find(RPR_TAG)
+        vanish_elem = rpr.find(f"{W}vanish") if rpr is not None else None
 
         styles[style_id] = StyleInfo(
             style_id=style_id,
             name=(name_elem.get(f"{W}val") if name_elem is not None else "") or "",
             based_on=(based_on_elem.get(f"{W}val") if based_on_elem is not None else None),
-            hidden=toggle_on(rpr, f"{W}vanish"),
+            vanish=is_on(vanish_elem) if vanish_elem is not None else None,
             style_type=style.get(f"{W}type") or "",
         )
 
@@ -698,13 +748,30 @@ class StyleIndex:
         return False
 
     def is_hidden(self, style_id: str | None) -> bool:
-        """True if the style, or one it inherits from, marks its text hidden.
+        """Effective hidden state of a style chain, under toggle semantics.
 
-        MasterSpec hides its notes this way rather than on each run.
+        MasterSpec hides its notes through the style rather than on each run.
+        ``w:vanish`` is a toggle property, so declarations along the
+        ``w:basedOn`` chain do not simply accumulate: a derived style that
+        repeats its base style's ``<w:vanish/>`` switches hidden back *off*,
+        and Word renders that text normally.  Treating every declaration as
+        "on" would delete it.
+
+        An explicit ``w:val="0"`` anywhere in the chain is taken as off
+        outright.  Where the spec leaves room, the reading that keeps text is
+        the one to take.
         """
         if not style_id:
             return False
-        return any(info.hidden for info in self.chain(style_id))
+
+        hidden = False
+        for info in self.chain(style_id):
+            if info.vanish is None:
+                continue
+            if info.vanish is False:
+                return False
+            hidden = not hidden
+        return hidden
 
 
 # ---------------------------------------------------------------------------

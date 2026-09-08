@@ -104,12 +104,18 @@ formatting signal to cross the threshold; `inline_patterns` produce
 out of the paragraph in place. `DetectionEngine.should_remove()` ignores inline
 detections — they never remove their element.
 
+The inline tier must stay separable when *judging* a removal, which is why
+`removal_patterns()` takes `include_inline`. An inline pattern matching a paragraph
+that vanished entirely means only that the paragraph contained a placeholder — never
+that losing it was intended. Verification asks the narrower question instead: does
+cutting every placeholder leave nothing behind?
+
 ### Dataclass-Based Results
 
 Processing results are communicated via dataclasses, not exceptions:
 - `Detection` — individual content detection with confidence, spans, formatting flag
 - `ProcessingResult` — detections plus an errors list
-- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output
+- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a pattern name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained
 - `StyleInfo` / `StyleIndex` — `word/styles.xml` resolved for name and `w:basedOn` matching
 
 Errors accumulate in result objects; processing doesn't halt on non-fatal issues.
@@ -296,5 +302,7 @@ Add the pattern to `editorial_artifacts.inline_patterns`. No code change is need
 - **Temp files** are created with `tempfile.mkdtemp(prefix="speccleanse_")` and cleaned up in `finally` blocks
 - **`patterns.yaml`** must be in the same directory as `gui.py`, and is always read as UTF-8 — it contains `©`, `–` and `—`, which the Windows default encoding silently mangles
 - **Toggle properties** (`w:i`, `w:b`, `w:vanish`) are on when present *without* `w:val`, and off when `w:val` is `0`/`false`/`off`. Use `docx_xml.is_on()`/`toggle_on()`, never a bare `find(...) is not None`
+- **Toggle properties inherited through styles do not accumulate.** Along a `w:basedOn` chain they XOR: a style that repeats its base style's `<w:vanish/>` switches hidden back *off*, and Word renders that text normally. `StyleIndex.is_hidden()` implements that, and treats an explicit `w:val="0"` anywhere in the chain as off — where the spec leaves room, take the reading that keeps text
+- **Tracked deletions are not all marked up the same way.** A deleted run holds `w:delText`, which no extractor reads; a deleted table *row* keeps ordinary `w:t` and records the deletion only in `w:trPr` (cells use `w:cellDel`). Accepting revisions therefore has to remove the row or cell whole, not just the marker
 - **Repacking** writes to a temp file and `os.replace`s it into place, so an interrupted run cannot leave a truncated `.docx`
 - **Tracked changes and comments** are only touched when `DocxProcessor(strip_revisions=True)`, which the GUI exposes as a checkbox, default off
