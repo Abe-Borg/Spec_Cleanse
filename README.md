@@ -195,8 +195,16 @@ Spec_Cleanse/
 │   ├── deep_cleaner.py
 │   └── README.md
 ├── README.md
+├── CHANGELOG.md
 └── LICENSE.md
 ```
+
+## Releases
+
+Tagged releases follow [Semantic Versioning](https://semver.org/). See
+[CHANGELOG.md](./CHANGELOG.md) for what changed in each one, and the
+[releases page](https://github.com/Abe-Borg/Spec_Cleanse/releases) for
+downloadable source archives.
 
 ## License
 
