@@ -346,9 +346,22 @@ deliberately:
   and accept an exact match *before* consulting similarity. It must not lower `MIN_PAIR_SIMILARITY`,
   accept all short survivors, drop `added` from the pass predicate, or otherwise create a shortcut
   that admits extra deletions.
-- W00 also lands F06's injected-damage test **as a deliberately failing test**, marked with the
-  package that closes it (W03) and the reason. This makes it impossible to "fix" F07 in a way that
-  entrenches F06 without the suite saying so.
+- W00 also lands F06's injected-damage test, marked with the package that closes it (W03) and the
+  reason. Land it under **`unittest.expectedFailure`**, not as an ordinary failing test. A suite left
+  red from W00 through W02 cannot validate a package boundary — every run fails for a known reason,
+  so a genuine new regression is obscured and "was it green?" stops answering anything, which is the
+  same objection invariant 15 makes about a warning nobody can act on. `expectedFailure` avoids that
+  and is a *stronger* tripwire than a red test, because it fires in both directions:
+
+  | State | unittest reports | Exit |
+  |---|---|---|
+  | V04 still failing (W00–W02) | `OK (expected failures=1)` | 0 — suite green |
+  | V04 starts passing (W03, or a wrong F07 fix) | `FAILED (unexpected successes=1)` | 1 — suite red |
+
+  Both rows were verified against stdlib `unittest`. A plain red test says nothing when someone
+  changes the behavior; this one fails loudly the moment V04's verdict changes for any reason. W03
+  removes the decorator when it lands the real fix — the unexpected-success failure is what forces
+  that, and it is a feature, not a chore.
 - W03 closes F06 by changing one predicate in the same function: require that every deleted fragment
   be **covered by** authorized spans, not merely that it **contains** a match.
 
@@ -392,8 +405,9 @@ implemented.
 | W10 | Medium plus corpus/Word availability | Establishes what is actually ready to trust | Treating unavailable manual evidence as a pass |
 
 Verify each integrated stage before changing the next shared contract. A fixture may land with its fix
-so mainline is not deliberately left red — except the F06 test described in §5.2, which lands red on
-purpose, named and explained. If an agent proposes a larger redesign, require it to explain why the
+so mainline is not deliberately left red. **Mainline stays green throughout**, including across the
+W00–W02 window: the one test that anticipates a later fix is the F06 case in §5.2, and it is carried
+under `unittest.expectedFailure` precisely so it does not turn the suite red. If an agent proposes a larger redesign, require it to explain why the
 smaller correction cannot satisfy the same acceptance tests; prefer the smaller correction when both work.
 
 ## 6. Working model and ownership
@@ -507,12 +521,16 @@ paragraph as an acceptable alternative outcome. Where multiple supported outcome
 represent them explicitly or validate the deletion against the eligible intervals; do not enumerate
 arbitrary subsets exponentially.
 
-Land the F06 injected-damage test (§10.5, V04) here as a deliberately failing test naming W03 as the
-package that closes it.
+Land the F06 injected-damage test (§10.5, V04) here under `unittest.expectedFailure`, naming W03 as
+the package that closes it and the reason it is expected to fail. Do **not** land it as an ordinary
+failing test: that would leave the suite red across W00, W01 and W02, which is exactly when package
+boundaries need a trustworthy green to validate against. See §5.2 for the verified behavior in both
+directions.
 
 **Exit gate:** no intra-batch destination collision is reachable; a failed verification cannot be
 reported as success; the reproduced separator and long-redaction cases produce exact expected text;
-the F06 test is red, named, and explained; the existing suite is otherwise green.
+the F06 test is present under `expectedFailure`, named and explained; the suite is green, reporting
+one expected failure.
 
 ## 8. W01: baseline, fixtures, and corpus census
 
@@ -541,7 +559,10 @@ fixtures. Respect any write restrictions in the receiving session.
 
 The last recorded suite state is **92 passed, 4 skipped** on Linux with Python 3.11 and `lxml` 6.0.2;
 the four skips are the GUI tests. On Windows those four run, so a Windows baseline is the one that
-matters for W07. Record interpreter, platform, counts, and skips — a bare "all green" is not a baseline.
+matters for W07. Record interpreter, platform, counts, skips, and expected failures — a bare "all
+green" is not a baseline. From W00 onward the expected-failure count is load-bearing: W00 adds one
+(§7.4), and it must return to zero when W03 lands, so a baseline that does not distinguish expected
+failures from failures cannot detect either half of that transition.
 
 ### 8.2 Regression fixtures
 
@@ -860,7 +881,8 @@ observed.
 | V11 | Body requirement disappears but identical header text remains | not measured | Header text must not excuse body loss |
 | V12 | Insert, substitution, or reordered protected clauses | not measured | Not accepted as an expected deletion |
 
-V04 lands early, in W00, as a deliberately failing test (§5.2 and §7.4).
+V04 lands early, in W00, under `unittest.expectedFailure` so the suite stays green until W03 removes
+the decorator along with the defect (§5.2 and §7.4).
 
 For ambiguous identical text, do not claim source occurrence identity that the output format cannot
 establish. The safety assertion is preservation of required text, multiplicity, order, and available
@@ -1351,7 +1373,9 @@ Existing minimalist fixtures are not automatically valid Word compatibility fixt
 verify that every namespace named by `mc:Ignorable` is actually declared.
 
 Run the full suite after integration, and once more only if subsequent edits justify it. Record
-interpreter, platform, test count, skips, and failures against the W01 baseline. GUI tests skipped on
+interpreter, platform, test count, skips, expected failures, and failures against the W01 baseline.
+An expected failure is not a failure and an unexpected success is; record them as distinct counts.
+GUI tests skipped on
 Linux do not establish Windows GUI behavior.
 
 ### 17.2 Corpus comparison
@@ -1459,7 +1483,8 @@ No release tag, push, publication, or deployment is part of this completion repo
 - [ ] A separator covered by a redaction is removed; `Provide -units.` cannot recur.
 - [ ] Page and column breaks are preserved, with the rule tested explicitly.
 - [ ] The reproduced long redaction pairs correctly, without lowering the similarity threshold.
-- [ ] The F06 injected-damage test is present, red, named, and attributed to W03.
+- [ ] The F06 injected-damage test is present under `unittest.expectedFailure`, named, and attributed
+      to W03; the suite is green with one expected failure, not red.
 
 ### Content and verification
 
