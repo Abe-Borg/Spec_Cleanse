@@ -51,7 +51,11 @@ against its own input.
   violation, alongside modification and structural-lint checks.
 - Categories derive from `DetectionEngine.removal_patterns()`, so a new detector's
   patterns are recognised without a second registration.
-- Verification can fail a run rather than only reporting.
+- A run is judged PASS only when unexpected removals, unexpected modifications,
+  preserve violations, structural violations and added paragraphs all come back
+  empty; the verdict and its supporting detail are written to the log. The verdict
+  is advisory — a FAIL is reported but the cleaned file is still written and still
+  counts as processed, so review the log before trusting an output.
 
 ### Interface
 

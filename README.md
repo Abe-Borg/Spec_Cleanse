@@ -156,7 +156,9 @@ After cleaning, SpecCleanse compares the input and output and reports:
   oddities are not blamed on the clean.
 - **Added paragraphs** — text in the output that was not in the input.
 
-A run passes only when all four come back clean.
+A run passes only when all four come back clean. The verdict is advisory: a FAIL
+is written to the log with its supporting detail, but the cleaned file is still
+produced and still counts as processed, so read the log before trusting an output.
 
 Verification borrows the detection engine's compiled patterns rather than
 recompiling its own copy, so the two can never drift apart. That makes the pattern
