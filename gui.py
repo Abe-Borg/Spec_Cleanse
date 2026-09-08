@@ -18,7 +18,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from apppaths import resolve_config_path
-from batch import BatchItem, BatchPlan, plan_batch
+from batch import BatchItem, BatchPlan, FileOutcome, plan_batch, summarise
 from detection import DetectionEngine, ContentType
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
@@ -132,40 +132,56 @@ def _clean_one(
     engine: DetectionEngine,
     log,
     strip_revisions: bool = False,
-) -> bool:
-    """Run single-pass content removal on a single file."""
+) -> FileOutcome:
+    """Run single-pass content removal on a single file.
+
+    Writing the output and verifying it are separate outcomes.  A file whose
+    verification reported a preserve violation was written successfully and is
+    still not something to hand on unread, so it is neither a success nor a
+    failure: it needs review, and the caller is told which.
+    """
     processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
+    log("  Content removal...")
+    result: ProcessingResult = processor.process(
+        input_path=input_path,
+        output_path=output_path,
+    )
+
+    if not result.success:
+        for err in result.errors:
+            log(f"  ERROR: {err}")
+        return FileOutcome.FAILED
+
+    removed, redacted, preserved = _group_detections(result.detections)
+    log(f"    Removed {sum(len(v) for v in removed.values())} items,"
+        f" redacted {len(redacted)} inline placeholder(s),"
+        f" preserved {len(preserved)}")
+
+    log("  Checking the output against the rules that produced it...")
     try:
-        log("  Content removal...")
-        result: ProcessingResult = processor.process(
-            input_path=input_path,
-            output_path=output_path,
-        )
-
-        if not result.success:
-            for err in result.errors:
-                log(f"  ERROR: {err}")
-            return False
-
-        removed, redacted, preserved = _group_detections(result.detections)
-        log(f"    Removed {sum(len(v) for v in removed.values())} items,"
-            f" redacted {len(redacted)} inline placeholder(s),"
-            f" preserved {len(preserved)}")
-
-        log("  Verifying no spec content was lost...")
         vresult = verify_clean(
             input_path, output_path, engine=engine, strip_revisions=strip_revisions
         )
-        _log_verification(vresult, log)
-
-        log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
-            f" {vresult.removed_characters:,} characters of text taken out")
-        return True
-
     except Exception as exc:
-        log(f"  FAILED: {exc}")
-        return False
+        # The file was written; only the check failed.  Saying nothing was
+        # produced would be false, and hiding the path would leave an
+        # unverified document sitting in the output folder unannounced.
+        log(f"  FAILED: the output could not be verified: {exc}")
+        if output_path.exists():
+            log(f"  The cleaned file was written but is UNVERIFIED: {output_path}")
+        return FileOutcome.FAILED
+
+    _log_verification(vresult, log)
+
+    log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
+        f" {vresult.removed_characters:,} characters of text taken out")
+
+    if vresult.passed:
+        return FileOutcome.VERIFIED
+
+    log(f"  NEEDS REVIEW — the cleaned file was written: {output_path}")
+    return FileOutcome.NEEDS_REVIEW
 
 
 def _log_verification(vresult, log) -> None:
@@ -183,7 +199,12 @@ def _log_verification(vresult, log) -> None:
             f" {len(vresult.unexpected_modifications)} unexpected)")
 
     if vresult.passed:
-        log("    PASS — every change matches a rule and the structure is intact")
+        # What this actually establishes: every difference between input and
+        # output was accounted for by a configured rule, and the structural
+        # checks found nothing the input did not already have.  It is not a
+        # statement that the document is correct, nor that Word will open it.
+        log("    PASS — no unexplained text changes or new checked structural "
+            "problems were found")
         return
 
     if vresult.structural:
@@ -685,8 +706,7 @@ class SpecCleanseGUI:
                 return
 
             total = len(items)
-            successes = 0
-            failures = 0
+            counts = {outcome: 0 for outcome in FileOutcome}
 
             # The destinations were worked out and validated before this
             # thread started.  They are not recomputed here: the selection and
@@ -696,22 +716,18 @@ class SpecCleanseGUI:
                 self._set_progress((i - 1) / total * 100)
                 self._log(f"[{i}/{total}] {item.source.name}")
 
-                ok = _clean_one(
+                outcome = _clean_one(
                     item.source, item.destination, engine, self._log, strip_revisions
                 )
-                if ok:
-                    successes += 1
+                counts[outcome] += 1
+                if outcome is not FileOutcome.FAILED:
                     self._log(f"  -> {item.destination.name}")
-                else:
-                    failures += 1
 
                 self._log("")
 
             self._set_progress(100)
 
-            summary = f"Done: {successes} succeeded"
-            if failures:
-                summary += f", {failures} failed"
+            summary = summarise(counts)
             self._set_status(summary)
             self._log("=" * 50)
             self._log(summary)

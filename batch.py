@@ -32,6 +32,29 @@ class FileOutcome(Enum):
     FAILED = "failed"
 
 
+def summarise(counts: dict[FileOutcome, int]) -> str:
+    """One line describing how a finished run turned out.
+
+    Every outcome that actually occurred is named.  There is deliberately no
+    "succeeded" total: that word used to cover both a verified file and one
+    whose verification reported a preserve violation, which is the confusion
+    :class:`FileOutcome` exists to end.
+    """
+    verified = counts.get(FileOutcome.VERIFIED, 0)
+    review = counts.get(FileOutcome.NEEDS_REVIEW, 0)
+    failed = counts.get(FileOutcome.FAILED, 0)
+
+    parts = []
+    if verified:
+        parts.append(f"{verified} verified")
+    if review:
+        parts.append(f"{review} need{'s' if review == 1 else ''} review")
+    if failed:
+        parts.append(f"{failed} failed")
+
+    return "Done: " + (", ".join(parts) if parts else "no files processed")
+
+
 #: Appended to an input's stem to name its cleaned output.
 OUTPUT_SUFFIX = "_cleaned"
 

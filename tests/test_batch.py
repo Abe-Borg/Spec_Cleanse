@@ -17,6 +17,7 @@ from batch import (
     output_for,
     plan_batch,
     same_file,
+    summarise,
 )
 
 
@@ -184,6 +185,43 @@ class ExistingPathTests(unittest.TestCase):
 
     def test_same_file_is_false_for_two_missing_paths(self):
         self.assertFalse(same_file(self.dir / "no.docx", self.dir / "nope.docx"))
+
+
+class SummariseTests(unittest.TestCase):
+
+    def test_every_outcome_that_occurred_is_named(self):
+        self.assertEqual(
+            summarise({
+                FileOutcome.VERIFIED: 8,
+                FileOutcome.NEEDS_REVIEW: 2,
+                FileOutcome.FAILED: 1,
+            }),
+            "Done: 8 verified, 2 need review, 1 failed",
+        )
+
+    def test_zero_counts_are_left_out(self):
+        self.assertEqual(
+            summarise({FileOutcome.VERIFIED: 3, FileOutcome.FAILED: 0}),
+            "Done: 3 verified",
+        )
+
+    def test_one_file_needing_review_reads_correctly(self):
+        self.assertEqual(
+            summarise({FileOutcome.NEEDS_REVIEW: 1}), "Done: 1 needs review"
+        )
+
+    def test_an_empty_run_says_so(self):
+        self.assertEqual(
+            summarise({o: 0 for o in FileOutcome}), "Done: no files processed"
+        )
+
+    def test_needs_review_is_never_folded_into_a_success_total(self):
+        line = summarise({FileOutcome.VERIFIED: 1, FileOutcome.NEEDS_REVIEW: 1})
+
+        self.assertIn("1 verified", line)
+        self.assertIn("1 needs review", line)
+        self.assertNotIn("succeeded", line)
+        self.assertNotIn("2", line)
 
 
 class FileOutcomeTests(unittest.TestCase):
