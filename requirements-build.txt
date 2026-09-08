@@ -1,0 +1,8 @@
+# Build-time only — not needed to run SpecCleanse from source.
+# Installed by .github/workflows/release.yml on the Windows runner, and by
+# anyone building the executable locally. See packaging/ for how it is used.
+#
+# Runtime dependencies are pinned exactly in requirements.txt because they
+# affect what the app does to a document. This one only affects how the app is
+# packaged, so it tracks the 6.x line rather than a single build.
+pyinstaller>=6.11,<7

@@ -1,0 +1,127 @@
+name: Release
+
+# Builds the Windows executable and installer and attaches them to a release.
+#
+# PyInstaller does not cross-compile, so this has to run on Windows. Pushing a
+# vX.Y.Z tag builds and uploads automatically; workflow_dispatch covers a
+# release that was already tagged before this workflow existed, and lets a build
+# be re-run without moving the tag.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and attach assets to (e.g. v1.0.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Work out which tag is being built
+        id: version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF#refs/tags/}"
+          fi
+          # The installer wants a bare version; the release wants the tag.
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Building ${tag}"
+
+      - uses: actions/checkout@v4
+        with:
+          # Build the tagged commit, not whatever master is at now.
+          ref: ${{ steps.version.outputs.tag }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Run tests
+        # Windows has tkinter, so the GUI tests that skip on Linux run here.
+        run: python -m unittest discover -s tests -t .
+
+      - name: Build the executable
+        run: pyinstaller packaging/speccleanse.spec --noconfirm
+
+      - name: Check the executable was produced
+        shell: bash
+        run: |
+          test -f dist/SpecCleanse.exe || { echo "PyInstaller produced no exe"; exit 1; }
+          ls -lh dist/SpecCleanse.exe
+
+      - name: Locate Inno Setup
+        id: iscc
+        shell: pwsh
+        run: |
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            Write-Host "Inno Setup not present on the runner; installing it."
+            choco install innosetup --no-progress -y
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "Could not find ISCC.exe after installing Inno Setup" }
+          Write-Host "Using $iscc"
+          "path=$iscc" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Build the installer
+        run: >
+          & "${{ steps.iscc.outputs.path }}"
+          /DAppVersion=${{ steps.version.outputs.version }}
+          packaging\installer.iss
+        shell: pwsh
+
+      - name: Name the portable executable after its version
+        shell: bash
+        run: |
+          cp dist/SpecCleanse.exe "dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe"
+          ls -lh dist/
+
+      - name: Upload build artifacts
+        # Kept regardless of whether the release upload below succeeds, so a
+        # failed upload does not mean rebuilding.
+        uses: actions/upload-artifact@v4
+        with:
+          name: speccleanse-windows-${{ steps.version.outputs.version }}
+          path: |
+            dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe
+            dist/SpecCleanse-Setup-${{ steps.version.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Attach the assets to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          # The release may not exist yet when a tag is pushed on its own.
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            echo "No release for $tag yet — creating one from the tag."
+            gh release create "$tag" --title "$tag" --generate-notes
+          fi
+          gh release upload "$tag" \
+            "dist/SpecCleanse-${version}-portable.exe" \
+            "dist/SpecCleanse-Setup-${version}.exe" \
+            --clobber

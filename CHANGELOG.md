@@ -5,6 +5,34 @@ All notable changes to SpecCleanse are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Windows packaging. Each release now carries two assets built on a Windows
+  runner: `SpecCleanse-Setup-<version>.exe`, an Inno Setup installer that
+  installs per-user and so needs no administrator rights, and
+  `SpecCleanse-<version>-portable.exe`, a single windowed executable that runs
+  from a folder or network share. Neither requires Python. Neither is signed, so
+  SmartScreen warns on first run.
+- `.github/workflows/release.yml` builds and attaches those assets when a
+  `vX.Y.Z` tag is pushed, and can be run manually against an existing tag.
+- `apppaths.py`, holding the runtime file locations, with tests that simulate a
+  PyInstaller bundle.
+
+### Fixed
+
+- `patterns.yaml` was located as `Path(__file__).parent / "patterns.yaml"`, which
+  in a frozen build resolves inside PyInstaller's temporary extraction directory
+  — deleted when the process exits. Editing it, the documented way to add
+  detection patterns without touching code, would have silently done nothing for
+  anyone running an installed build. A frozen SpecCleanse now prefers a copy
+  beside the executable, otherwise a per-user copy under `%APPDATA%\SpecCleanse`
+  seeded from the shipped defaults on first run.
+- Configuration errors named only `patterns.yaml`; they now give the full path,
+  since a frozen build has more than one copy. The GUI also logs the file it
+  loaded as its first line.
+
 ## [1.0.0] - 2026-09-08
 
 First tagged release. SpecCleanse strips editorial noise from `.docx` specification
@@ -79,4 +107,5 @@ against its own input.
 - Retired ZIP/XML structural optimization and unused-style removal stages; their
   source remains in `legacy/` for reference and is not imported by the running app.
 
+[Unreleased]: https://github.com/Abe-Borg/Spec_Cleanse/compare/v1.0.0...HEAD
 [1.0.0]: https://github.com/Abe-Borg/Spec_Cleanse/releases/tag/v1.0.0

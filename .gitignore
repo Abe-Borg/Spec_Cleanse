@@ -15,8 +15,11 @@ dist/
 .eggs/
 
 # PyInstaller
+# *.spec ignores generated specs; packaging/speccleanse.spec is written by hand
+# and is the build definition, so it has to be tracked.
 *.manifest
 *.spec
+!packaging/speccleanse.spec
 
 # Unit test / coverage reports
 htmlcov/

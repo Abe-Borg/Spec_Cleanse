@@ -17,6 +17,7 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
+from apppaths import resolve_config_path
 from detection import DetectionEngine, ContentType
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
@@ -27,7 +28,10 @@ from verify import verify_clean
 # Helpers
 # ---------------------------------------------------------------------------
 
-CONFIG_PATH = Path(__file__).parent / "patterns.yaml"
+# Where patterns.yaml lives depends on how SpecCleanse is running: beside the
+# modules from source, beside the .exe or under %APPDATA% when frozen. See
+# apppaths.resolve_config_path.
+CONFIG_PATH = resolve_config_path()
 
 
 def build_engine() -> DetectionEngine:
@@ -398,6 +402,8 @@ class SpecCleanseGUI:
         log_sb.pack(side="right", fill="y")
         self.log_text.configure(yscrollcommand=log_sb.set)
 
+        self._log(f"Patterns: {CONFIG_PATH}")
+
     def _add_files(self):
         paths = filedialog.askopenfilenames(
             title="Select DOCX files",
@@ -596,7 +602,7 @@ class SpecCleanseGUI:
         try:
             return build_engine()
         except Exception as exc:
-            self._log(f"Configuration error in {CONFIG_PATH.name}: {exc}")
+            self._log(f"Configuration error in {CONFIG_PATH}: {exc}")
             self._log("Fix the file and try again — nothing was processed.")
             self._set_status("Configuration error")
             return None

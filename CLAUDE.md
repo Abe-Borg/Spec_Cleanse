@@ -25,6 +25,7 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
 | `verify.py` | Post-processing verification: removals, modifications, structural lint |
 | `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
+| `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
 | `legacy/deep_cleaner.py` | Archived; not used |
 | `legacy/style_cleaner.py` | Archived; not used |
@@ -41,6 +42,9 @@ but no detection policy. Anything that decides *what* to remove belongs in
 | `patterns.yaml` | All detection patterns, formatting signals, styles, preserve rules |
 | `requirements.txt` | Pinned Python dependencies (UTF-8) |
 | `CHANGELOG.md` | Release history, Keep a Changelog format |
+| `requirements-build.txt` | Build-time only (PyInstaller); not needed to run from source |
+| `packaging/speccleanse.spec` | PyInstaller build definition |
+| `packaging/installer.iss` | Inno Setup installer definition |
 
 ### Data Flow
 
@@ -277,6 +281,35 @@ To cut one: confirm `python -m unittest discover -s tests -t .` is green on
 `master`, add the version's section to `CHANGELOG.md` (newest first, with its
 link reference at the bottom), commit, then tag that commit and push the tag.
 Publish the GitHub release from the tag using the changelog section as its body.
+
+Pushing the tag also starts `.github/workflows/release.yml`, which builds the
+Windows assets and attaches them. It runs on `windows-latest` because PyInstaller
+does not cross-compile — nothing in this repo can produce a Windows `.exe` from
+Linux or macOS. The workflow also accepts a `workflow_dispatch` with a tag name,
+which is how a release tagged before the workflow existed gets its assets, and
+how a build is retried without moving the tag.
+
+Two assets are produced: `SpecCleanse-<version>-portable.exe` (a single windowed
+executable) and `SpecCleanse-Setup-<version>.exe` (an Inno Setup installer that
+installs per-user, so it needs no administrator rights). Neither is code-signed,
+so SmartScreen warns on first run.
+
+### patterns.yaml in a frozen build
+
+PyInstaller unpacks the bundle into a temporary directory and deletes it on exit,
+so the bundled `patterns.yaml` is not somewhere a user can usefully edit — but
+editing it is a documented workflow. `apppaths.resolve_config_path()` handles the
+difference: from source it returns the file beside the modules, unchanged; frozen,
+a copy beside the `.exe` wins if present, otherwise a per-user copy under
+`%APPDATA%\SpecCleanse` is used and seeded from the bundled default on first run.
+Seeding is best-effort — a read-only profile falls back to the bundled copy rather
+than raising, because a traceback from a windowed build goes nowhere anyone can
+see. `gui.py` logs the resolved path at startup and names it in full in
+configuration errors.
+
+Anything that changes where files live at runtime belongs in `apppaths.py`, and
+needs a test in `tests/test_apppaths.py` — those rules only ever execute inside a
+bundle, which the suite simulates by patching `sys.frozen` and `sys._MEIPASS`.
 
 ## Common Modification Scenarios
 
