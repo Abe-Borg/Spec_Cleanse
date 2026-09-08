@@ -49,7 +49,10 @@ class FakeBundle:
 class FrozenLayoutTests(unittest.TestCase):
     def setUp(self):
         self._tmp = TemporaryDirectory()
-        self.root = Path(self._tmp.name)
+        # Resolved because Windows hands back an 8.3 short path here
+        # (C:/Users/RUNNER~1/...) while apppaths resolves what it returns
+        # (C:/Users/runneradmin/...). Same directory, different spelling.
+        self.root = Path(self._tmp.name).resolve()
         self.addCleanup(self._tmp.cleanup)
 
     def _bundle(self, seed_default: bool = True) -> FakeBundle:

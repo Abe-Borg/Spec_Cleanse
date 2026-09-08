@@ -37,7 +37,10 @@ def bundle_dir() -> Path:
     anything written there is gone when the process exits.
     """
     if is_frozen():
-        return Path(sys._MEIPASS)
+        # Resolved, like executable_dir below: on Windows these paths can arrive
+        # in 8.3 short form (RUNNER~1 for runneradmin), and two spellings of one
+        # directory must not compare unequal.
+        return Path(sys._MEIPASS).resolve()
     return Path(__file__).resolve().parent
 
 
