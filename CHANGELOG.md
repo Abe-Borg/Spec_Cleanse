@@ -5,7 +5,7 @@ All notable changes to SpecCleanse are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-09-08
 
 ### Added
 
@@ -110,5 +110,5 @@ against its own input.
 - Retired ZIP/XML structural optimization and unused-style removal stages; their
   source remains in `legacy/` for reference and is not imported by the running app.
 
-[Unreleased]: https://github.com/Abe-Borg/Spec_Cleanse/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/Abe-Borg/Spec_Cleanse/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Abe-Borg/Spec_Cleanse/releases/tag/v1.0.0
