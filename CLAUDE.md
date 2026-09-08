@@ -40,6 +40,7 @@ but no detection policy. Anything that decides *what* to remove belongs in
 |------|---------|
 | `patterns.yaml` | All detection patterns, formatting signals, styles, preserve rules |
 | `requirements.txt` | Pinned Python dependencies (UTF-8) |
+| `CHANGELOG.md` | Release history, Keep a Changelog format |
 
 ### Data Flow
 
@@ -265,6 +266,17 @@ Run the GUI against sample files. The log output shows:
 2. Run the GUI against representative DOCX files (with and without footnotes/headers)
 3. Open the output in Word — there must be no "unreadable content" prompt
 4. Check the verification output for unexpected removals, unexpected modifications, preserve violations, and structural violations
+
+## Releases
+
+Releases are git tags of the form `vMAJOR.MINOR.PATCH` on `master`, following
+Semantic Versioning. There is no version constant in the source and no packaging
+metadata — the tag is the version.
+
+To cut one: confirm `python -m unittest discover -s tests -t .` is green on
+`master`, add the version's section to `CHANGELOG.md` (newest first, with its
+link reference at the bottom), commit, then tag that commit and push the tag.
+Publish the GitHub release from the tag using the changelog section as its body.
 
 ## Common Modification Scenarios
 
