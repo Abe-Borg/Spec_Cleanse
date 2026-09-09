@@ -12,12 +12,21 @@ from xml.sax.saxutils import escape
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
+#: Namespace declarations every generated part carries.
+#:
+#: ``w14`` is declared even though nothing here emits a ``w14:`` element,
+#: because ``mc:Ignorable`` names it.  Markup Compatibility (ECMA-376 Part 3)
+#: requires every prefix listed there to be a declared namespace prefix, and
+#: an undeclared one makes the part non-conformant — so a fixture written that
+#: way is not a valid positive control for Word validation, whatever else it
+#: proves.  It named ``w14`` without declaring it until §17.1 asked.
 NS_DECL = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
     'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
     'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
     'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
     'xmlns:v="urn:schemas-microsoft-com:vml" '
+    'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
     'mc:Ignorable="w14"'
 )
 
