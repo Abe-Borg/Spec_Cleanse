@@ -265,10 +265,34 @@ The GUI tests are skipped where `tkinter` is unavailable — every Linux run. Th
 rules that decide whether a batch is safe to write live in `batch.py` rather than
 `gui.py` for that reason, so they are exercised everywhere.
 
-One test is carried as an `unittest.expectedFailure`: an injected-damage case
-showing that an inline placeholder currently excuses deleting a requirement word
-beside it. The suite stays green while it fails, and turns red if it ever starts
-passing, which is what will prompt removing the decorator along with the defect.
+Some tests are carried as `unittest.expectedFailure` — cases that describe
+behaviour a later change will fix. The suite stays green while they fail, and turns
+red if one ever starts passing, which is what prompts removing the decorator along
+with the defect. Today they cover an inline placeholder excusing the deletion of a
+requirement word beside it, and five requirement sentences the shipped patterns
+currently remove.
+
+## Developer tools
+
+Measurement utilities under `tools/`. Nothing in the application imports them, they
+only read documents, and every clean they run is a dry run. They exist to answer
+questions that decisions about the patterns depend on.
+
+```bash
+# What would turning formatting-only removal off actually cost?
+python -m tools.census_formatting /path/to/specs
+
+# How much of a clean sits inside a bookmark range some REF field points at?
+python -m tools.census_references /path/to/specs
+
+# Record what this build decides, change something, and diff the two.
+python -m tools.corpus_compare record baseline.json /path/to/specs
+python -m tools.corpus_compare diff baseline.json candidate.json
+```
+
+Recordings and census output carry excerpts of the documents they measured.
+Specifications are usually proprietary — keep them in a scratch directory and do not
+commit one. `corpus_compare --no-text` omits excerpts entirely and still diffs.
 
 ## Project structure
 
@@ -282,6 +306,10 @@ Spec_Cleanse/
 ├── docx_xml.py         # Shared WordprocessingML plumbing and config loading
 ├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
+├── tools/              # Developer measurement utilities (not imported by the app)
+│   ├── census_formatting.py   # Cost of turning formatting-only removal off
+│   ├── census_references.py   # Removals inside referenced bookmark ranges
+│   └── corpus_compare.py      # Record decisions, diff two builds
 ├── requirements.txt
 ├── requirements-build.txt
 ├── tests/

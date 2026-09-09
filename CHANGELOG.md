@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tools/`, developer measurement utilities. Nothing in the application imports
+  them, they only read documents, and every clean they run is a dry run.
+  - `census_formatting` measures what turning `formatting_only_removal` off
+    would cost, by cleaning each document twice and reporting the paragraphs
+    that would newly survive. The proposal to flip that default has so far
+    rested on an argument rather than a measurement.
+  - `census_references` measures how much of a clean sits inside a bookmark
+    range that some supported `REF`/`PAGEREF`/`NOTEREF` field or internal
+    hyperlink actually names — the question that decides how far reference
+    protection can reasonably go.
+  - `corpus_compare` records the decisions a build makes and diffs two
+    recordings, so a change to the patterns can be reviewed as "what did this
+    decide differently" rather than "do the tests still pass".
+- `tests/test_shipped_policy.py` pins what the shipped patterns do to
+  representative specification prose. Five requirement sentences the current
+  rules wrongly remove are carried as expected failures until the rules are
+  narrowed; five unambiguous editorial positives are pinned so that narrowing
+  cannot go too far.
+
 ### Fixed
 
 - Two selected documents sharing a basename mapped to one destination when a
@@ -60,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known
 
+- No real specification corpus was available when the census tools were built,
+  so they have not yet been pointed at one. Any decision taken about the
+  formatting-only default or the scope of reference protection must record
+  whether it had census data or was a judgement call without it.
+- Suite baseline at the time of writing: 190 passed, 7 skipped, 6 expected
+  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the seven GUI
+  skips run, so the counts there are 190 passed, 0 skipped, 6 expected
+  failures. An expected failure is not a failure and an unexpected success is;
+  they are tracked separately for that reason.
 - An inline placeholder still excuses deleting a requirement word beside it:
   `Provide two [Verify quantity] spare filters per unit.` reduced to
   `Provide two filters per unit.` verifies as expected, because classification
