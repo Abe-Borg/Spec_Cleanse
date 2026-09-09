@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from detection import DetectionEngine
+from detection import SUPERSEDED_PATTERNS, DetectionEngine, config_notices
 from docx_xml import load_config
 
 from tests.support import CONFIG_PATH, DocxTestCase
@@ -98,3 +98,78 @@ class ConfigValidationTests(DocxTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ConfigNoticeTests(unittest.TestCase):
+    """What a user running an older patterns.yaml is told about it.
+
+    apppaths prefers an existing executable-adjacent or per-user file over the
+    bundled default, so updating the application does not update the rules. A
+    configuration copied before a rule was narrowed keeps the broad version,
+    and nothing else would say so.
+    """
+
+    def test_the_shipped_configuration_says_nothing(self):
+        self.assertEqual(config_notices(load_config(CONFIG_PATH)), [])
+
+    def test_a_superseded_copyright_rule_is_named(self):
+        notices = config_notices({
+            "copyright_notices": {
+                "text_patterns": [r"may\s+not\s+be\s+reproduced",
+                                  r"all\s+rights\s+reserved"],
+            },
+        })
+
+        self.assertEqual(len(notices), 1)
+        self.assertIn("may", notices[0])
+        self.assertIn("Shop Drawings", notices[0], "says what the rule took")
+        self.assertIn("never overwritten", notices[0], "says edits are safe")
+
+    def test_a_superseded_editorial_rule_is_named(self):
+        notices = config_notices({
+            "editorial_artifacts": {
+                "text_patterns": [r"^\s*(?:select|choose)\s+one\b(?!-)"],
+            },
+        })
+
+        self.assertEqual(len(notices), 1)
+        self.assertIn("listed manufacturers", notices[0])
+
+    def test_an_edited_rule_is_left_alone(self):
+        # Matched on the exact prior string, so someone who tuned the rule
+        # themselves is not told their own work is out of date.
+        notices = config_notices({
+            "copyright_notices": {
+                "text_patterns": [r"may\s+not\s+be\s+reproduced\s+at\s+all"],
+            },
+        })
+
+        self.assertEqual(notices, [])
+
+    def test_formatting_only_removal_being_on_is_reported(self):
+        notices = config_notices({
+            "specifier_notes": {"formatting_only_removal": True},
+        })
+
+        self.assertEqual(len(notices), 1)
+        self.assertIn("formatting_only_removal", notices[0])
+        self.assertIn("census_formatting", notices[0], "points at the measurement")
+
+    def test_formatting_only_removal_being_off_is_not_worth_saying(self):
+        self.assertEqual(
+            config_notices({"specifier_notes": {"formatting_only_removal": False}}),
+            [],
+        )
+
+    def test_an_empty_configuration_says_nothing(self):
+        self.assertEqual(config_notices({}), [])
+
+    def test_every_superseded_pattern_is_one_the_project_used_to_ship(self):
+        # The check is worthless if the recorded strings drift from what was
+        # actually shipped, and a typo here would silently stop warning.
+        for section, superseded in SUPERSEDED_PATTERNS.items():
+            notices = config_notices({section: {"text_patterns": list(superseded)}})
+            self.assertEqual(
+                len(notices), len(superseded),
+                f"{section}: not every recorded pattern was recognised",
+            )

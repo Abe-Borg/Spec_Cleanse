@@ -24,11 +24,21 @@ specifier_notes:
     - '^\s*\*\*\*.*?\*\*\*\s*$'         # *** specifier notes ***
 
   # Remove text that carries editorial formatting (italic plus an editorial
-  # colour) even when no pattern matches it.  Some firms mark their notes
-  # only that way, so this is on by default — but real specification content
-  # can also be red and italic, so turn it off if it starts eating content.
-  # Such removals are labelled "formatting-only" in the Preview report.
-  formatting_only_removal: true
+  # colour) even when no pattern matches it.
+  #
+  # OFF by default.  This is the only mechanism in the tool that removes text
+  # on no content evidence at all — no pattern, no style, only how the text
+  # looks — and specification content is routinely red and italic where a
+  # decision is still pending.  A retained note costs some noise in whatever
+  # reads the cleaned file; a deleted requirement is not recoverable from it.
+  #
+  # Turn it on if your firm marks notes *only* by italic-plus-colour and
+  # nothing else distinguishes them.  Removals it causes are labelled
+  # "formatting-only" in the Preview report, and
+  #   python -m tools.census_formatting <your specs>
+  # reports what the setting is worth on your own documents, in both
+  # directions, without changing anything.
+  formatting_only_removal: false
 
   # Formatting indicators (if text has these, increase confidence)
   formatting_signals:
@@ -42,16 +52,54 @@ copyright_notices:
   enabled: true
   description: "Boilerplate copyright text"
 
+  # A single match here scores 0.7, which clears the 0.5 removal threshold on
+  # its own — so every pattern below has to be sufficient by itself.  Only
+  # unambiguous markers are.
+  #
+  # Reproduction and duplication language is not a marker.  It says the same
+  # thing, about the same act, in a copyright notice and in an ordinary
+  # requirement; what differs is who is imposing the restriction, and that is
+  # not in the text.  Every attempt to separate them by wording failed against
+  # routine specification prose:
+  #
+  #   'may not be reproduced'      took "Shop Drawings submitted under this
+  #                                Section may not be reproduced for use on
+  #                                other projects."
+  #   ...narrowed to require "in whole or in part" / "without written
+  #      permission", which then took "Shop Drawings may not be reproduced in
+  #      whole or in part without the Architect's written consent." — the same
+  #      boilerplate a notice uses, because a submittal restriction is
+  #      boilerplate too.
+  #
+  #   'duplication.*?prohibited'   took "...duplication of sprinkler coverage in
+  #                                adjacent zones is prohibited by the AHJ."
+  #   ...narrowed to require adjacency, which then took "Duplication of keys is
+  #      prohibited without written authorization from the Owner." — standard
+  #      door-hardware key control.
+  #
+  #   'unauthorized.*?reproduction'
+  #                                took "Unauthorized personnel shall not have
+  #                                access to the fire pump room; reproduction of
+  #                                access keys is not permitted."
+  #   ...narrowed to require adjacency, which then took "Provide keys designed
+  #      to prevent unauthorized duplication." — the same three words, in a
+  #      requirement.
+  #
+  # They are gone.  A notice carrying no ©, no "copyright" and no "all rights
+  # reserved" now survives, which is the accepted cost: it is one line of
+  # boilerplate in whatever reads the cleaned file, against a deleted
+  # requirement that is not recoverable from it.  The notice blocks this tool
+  # actually targets — MasterSpec, ARCOM, SpecLink — all carry a marker.
   text_patterns:
     - '©\s*\d{4}'                       # © 2026 — not a bare © (e.g. "Excel© file")
     - 'copyright\s*©'
     - 'copyright\s+\d{4}'
     - 'all\s+rights\s+reserved'
-    - 'may\s+not\s+be\s+reproduced'
-    - 'licensed\s+for\s+use\s+by'
-    - 'duplication.*?prohibited'
-    - 'unauthorized.*?reproduction'
     - 'exclusively\s+published\s+and\s+distributed'   # ARCOM distribution notice
+
+    # Anchored: a licence line opens with it.  Unanchored it took "Software
+    # licensed for use by the Owner shall be transferable."
+    - '^\s*licensed\s+for\s+use\s+by'
 
 hidden_text:
   enabled: true
@@ -63,7 +111,9 @@ specagent_references:
   description: "SpecAgent.com watermarks and references"
   
   text_patterns:
-    - 'spec\s*agent'                    # covers specagent.com, www.specagent, etc.
+    # Bounded so it matches the watermark and the domain but cannot fire inside
+    # a longer word.  This detector scores 1.0, so it needs to be exact.
+    - '\bspec\s*agent\b'               # covers specagent.com, www.specagent, etc.
 
 editorial_artifacts:
   enabled: true
@@ -100,12 +150,25 @@ editorial_artifacts:
 
   # High-confidence patterns — safe to remove the whole paragraph on text match.
   text_patterns:
-    # Retain/delete instructions
-    - 'retain\s+or\s+delete'
+    # Retain/delete instructions.  'retain or delete' is anchored to the start
+    # of the paragraph, optionally inside a bracket, so it fires when the
+    # paragraph *is* the instruction and not when a requirement merely contains
+    # the marker: "Provide two [retain or delete] spare filters per unit." keeps
+    # its text, brackets and all.  Cutting the marker out would need an inline
+    # rule, and inventing one broad enough to catch it would put every bracketed
+    # phrase in a requirement at risk.
+    - '^\s*\[?\s*retain\s+or\s+delete\b'
     - 'delete\s+if\s+not\s+(applicable|required|used)'
     - 'retain\s+if\s+(applicable|required|used)'
-    - '^\s*(?:select|choose)\s+one\b(?!-)'   # anchored; not "Select one-piece fittings"
     - 'delete\s+options?\s+not\s+(applicable|required|selected)'
+
+    # "Select one of the following paragraphs" is an instruction to a specifier;
+    # "Select one of the listed manufacturers" is an instruction to a
+    # contractor, and the two are indistinguishable from the opening words
+    # alone.  What separates them is what is being selected *from*: an editorial
+    # note points at the document's own structure.  Requiring that referent
+    # keeps the requirement; the (?!-) still rules out "Select one-piece".
+    - '^\s*(?:select|choose)\s+one\b(?!-)[^.]{0,40}\b(?:above|below|following|paragraphs?|subparagraphs?|options?|articles?)\b'
 
     # Common editing instructions
     - 'delete\s+this\s+(paragraph|section|line)'

@@ -46,7 +46,23 @@ class WorkerTests(DocxTestCase):
         self.assertIn("REMOVALS — editorial_artifact", self.output)
         self.assertIn("INLINE REDACTIONS", self.output)
         self.assertIn("PRESERVED", self.output)
+
+    def test_preview_labels_a_formatting_only_removal(self):
+        # Only reachable through the opt-in: removal on looks alone is off by
+        # default, so the italic red aside in DOCUMENT survives a plain run.
+        path = self.build(DOCUMENT)
+        engine = self.make_engine(specifier_notes={"formatting_only_removal": True})
+
+        self.assertTrue(gui._preview_one(path, engine, self.log))
         self.assertIn("formatting-only", self.output)
+
+    def test_the_default_run_keeps_the_italic_red_aside(self):
+        path = self.build(DOCUMENT)
+
+        gui._preview_one(path, self.make_engine(), self.log)
+
+        self.assertNotIn("formatting-only", self.output)
+        self.assertNotIn("Coordinate hangers", self.output.split("PRESERVED")[0])
 
     def test_clean_reports_a_pass(self):
         path = self.build(DOCUMENT)

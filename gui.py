@@ -19,7 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from apppaths import resolve_config_path
 from batch import BatchItem, BatchPlan, FileOutcome, plan_batch, summarise
-from detection import DetectionEngine, ContentType
+from detection import DetectionEngine, ContentType, config_notices
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
 from verify import verify_clean
@@ -661,6 +661,13 @@ class SpecCleanseGUI:
         # Every run starts by clearing the log, so the startup line is already
         # gone. A finished run's log has to say which patterns produced it.
         self._log(f"Patterns: {CONFIG_PATH}")
+
+        # An installed patterns.yaml is never overwritten by an update, so a
+        # copy made before a rule was narrowed keeps the old, broader rule and
+        # nothing would otherwise say so.
+        for notice in config_notices(engine.config):
+            self._log(f"  NOTE: {notice}")
+
         return engine
 
     def _run_preview(self, files: list[Path], strip_revisions: bool = False):

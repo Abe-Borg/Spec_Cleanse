@@ -63,7 +63,7 @@ class PatternConfig:
     inline_patterns: list[re.Pattern] = field(default_factory=list)
     formatting_signals: dict = field(default_factory=dict)
     style_names: list[str] = field(default_factory=list)
-    formatting_only_removal: bool = True
+    formatting_only_removal: bool = False
 
 
 class BaseDetector:
@@ -480,6 +480,71 @@ class PreserveDetector(BaseDetector):
         return None
 
 
+# =============================================================================
+# Configuration notices
+# =============================================================================
+
+#: Shipped patterns that were removed or narrowed because they deleted real
+#: requirement text, mapped to what each one took.  A configuration still
+#: carrying one is running the old, broader rule: ``apppaths`` prefers an
+#: existing executable-adjacent or per-user ``patterns.yaml`` over the bundled
+#: default, so a copy made before the change keeps it, and updating the
+#: application does not update it.  Matched on the exact prior string, so an
+#: edited rule is left alone rather than second-guessed.
+SUPERSEDED_PATTERNS: dict[str, dict[str, str]] = {
+    "copyright_notices": {
+        r"may\s+not\s+be\s+reproduced":
+            'removed "Shop Drawings ... may not be reproduced for use on other '
+            'projects."',
+        r"duplication.*?prohibited":
+            'removed "...duplication of sprinkler coverage in adjacent zones is '
+            'prohibited by the AHJ."',
+        r"unauthorized.*?reproduction":
+            'removed "Unauthorized personnel shall not have access to the fire '
+            'pump room; reproduction of access keys is not permitted."',
+    },
+    "editorial_artifacts": {
+        r"retain\s+or\s+delete":
+            'removed "Provide two [retain or delete] spare filters per unit."',
+        r"^\s*(?:select|choose)\s+one\b(?!-)":
+            'removed "Select one of the listed manufacturers."',
+    },
+}
+
+
+def config_notices(config: dict) -> list[str]:
+    """What is worth saying about the configuration actually being used.
+
+    Not validation — nothing here is an error, and none of it stops a run.
+    These are the two things a user running an older ``patterns.yaml`` cannot
+    otherwise tell: that a rule known to delete requirements is still active,
+    and that removal on formatting alone is switched on.
+    """
+    notices: list[str] = []
+
+    for section, superseded in SUPERSEDED_PATTERNS.items():
+        active = config.get(section, {}).get("text_patterns", []) or []
+        for pattern in active:
+            if pattern in superseded:
+                notices.append(
+                    f"{section}: the pattern {pattern!r} is still active. It was "
+                    f"narrowed because it {superseded[pattern]} Compare your "
+                    f"patterns.yaml with the one shipped alongside this version "
+                    f"to pick the change up; your edits are never overwritten."
+                )
+
+    if config.get("specifier_notes", {}).get("formatting_only_removal", False):
+        notices.append(
+            "specifier_notes.formatting_only_removal is on, so text is removed "
+            "on italic-plus-editorial-colour alone, with no pattern or style "
+            "behind it. That is off in current defaults. Preview labels such "
+            "removals 'formatting-only'; tools/census_formatting reports what "
+            "the setting is worth on your own documents."
+        )
+
+    return notices
+
+
 class DetectionEngine:
     """
     Main detection engine that coordinates all detectors.
@@ -533,7 +598,7 @@ class DetectionEngine:
                 section.get("paragraph_styles", []) + 
                 section.get("character_styles", [])
             ),
-            formatting_only_removal=section.get("formatting_only_removal", True),
+            formatting_only_removal=section.get("formatting_only_removal", False),
         )
     
     def _create_detectors(self) -> list[BaseDetector]:

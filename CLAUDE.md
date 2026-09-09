@@ -99,10 +99,24 @@ Detections are scored 0.0–1.0. Multiple signals combine:
 Evidence is kept in two buckets. *Content* evidence — a text pattern or an editorial
 style — says what the text is; *formatting* evidence — italic, editorial colour —
 says only how it looks, and the two formatting signals together land on exactly the
-0.5 threshold. `specifier_notes.formatting_only_removal` (default true) decides
+0.5 threshold. `specifier_notes.formatting_only_removal` (**default false**) decides
 whether formatting alone is enough; when it is false, formatting only boosts a score
 that content evidence already opened. Removals that crossed on formatting alone carry
 `Detection.formatting_only` and are labelled in Preview.
+
+The default is off because this is the only path that removes text on no content
+evidence whatsoever, and real specification text is routinely red and italic. It is
+set in three places that must agree — the shipped YAML, `PatternConfig` and
+`_make_pattern_config`'s omitted-key default, and verification's omitted-key default
+in `verify_clean` — and a test asserts each. Tests that depend on the switch state it
+explicitly rather than leaning on whichever way the default points.
+
+`detection.config_notices()` reports what a user's own `patterns.yaml` is doing that
+they cannot otherwise see: a shipped rule still present that was later narrowed for
+deleting requirements, and formatting-only removal being on. `apppaths` prefers an
+existing user file over the bundled one, so an update never changes their rules.
+Superseded rules are matched on the **exact** prior string, so someone who edited a
+rule themselves is not told their own work is stale.
 
 `editorial_artifacts` uses three tiers: `text_patterns` are high-confidence and remove
 the whole paragraph on text alone; `low_confidence_patterns` start at 0.3 and require a

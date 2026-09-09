@@ -181,11 +181,37 @@ short-circuit removal regardless of confidence.
 ### Removing on formatting alone
 
 Italic plus an editorial colour adds up to exactly 0.5, so text formatted that way
-is removed even when no pattern matches it. Some firms mark their notes only that
-way; other firms' real specification text is red and italic. The behaviour is the
-`specifier_notes.formatting_only_removal` switch, on by default. Such removals are
-labelled `formatting-only` in the Preview report, and verification trusts that
-signal only while the switch is on.
+could be removed even when no pattern matches it. That is the
+`specifier_notes.formatting_only_removal` switch, and it is **off by default**.
+
+It is the only mechanism here that removes text on no content evidence at all — no
+pattern, no style, only how the text looks. Some firms do mark their notes only that
+way, but specification text is routinely red and italic where a decision is still
+pending, and the two are indistinguishable to this tool. A retained note costs some
+noise in whatever reads the cleaned file; a deleted requirement is not recoverable
+from it.
+
+Turn it on in `patterns.yaml` if your notes carry no other distinguishing mark.
+Removals it causes are labelled `formatting-only` in the Preview report, and
+verification trusts that signal only while the switch is on. To see what the setting
+is worth on your own documents before deciding:
+
+```bash
+python -m tools.census_formatting /path/to/specs
+```
+
+That cleans each file twice — once each way — and reports the paragraphs the setting
+accounts for, without writing anything.
+
+### If you are upgrading
+
+`patterns.yaml` beside the executable or under `%APPDATA%\SpecCleanse` is never
+overwritten by an update, so a copy made earlier keeps whatever rules it had. On
+startup the log names the file in use and flags two things about it: any shipped
+rule still present that was later narrowed because it deleted real requirement
+text, and formatting-only removal being switched on. Neither stops a run. Your
+edits are never touched — compare your file with the shipped one and take what you
+want.
 
 ### Style-based detection
 
