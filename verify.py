@@ -747,6 +747,14 @@ def _compare_location(
     input side, so all of its paragraphs are additions.  Both fall out of the
     ordinary comparison rather than needing a case of their own.
     """
+    kept = _pure_deletion_pairing(input_paras, output_paras)
+    if kept is not None:
+        _classify_pure_deletion(
+            input_paras, output_paras, kept, result,
+            strip_revisions, surviving_numbering,
+        )
+        return
+
     input_texts = [p.text for p in input_paras]
     output_texts = [p.text for p in output_paras]
 
@@ -807,6 +815,95 @@ def _compare_location(
         # Only when the list still has members: a list whose every paragraph
         # went renumbers nothing, and a notice about it would be noise
         # dressed as precision.
+        if info.numbering and info.numbering in surviving_numbering:
+            result.numbering.append(NumberingNotice(
+                part=info.part, numbering=info.numbering,
+                preview=info.text[:60] + ("…" if len(info.text) > 60 else ""),
+            ))
+
+
+def _pure_deletion_pairing(
+    input_paras: list[ParagraphInfo], output_paras: list[ParagraphInfo]
+) -> list[int] | None:
+    """Input indices the output kept, when the output is a pure deletion.
+
+    ``difflib`` costs O(n²) inside ``find_longest_match`` when text repeats,
+    because every occurrence of a value is a candidate for every other.
+    Measured on the adversarial family — one of three strings per paragraph —
+    verification took 0.39s, 2.7s and 21.2s at 500, 1000 and 2000 paragraphs,
+    with 94% of it inside that one function.
+
+    A *pure deletion* needs none of that search.  Where every output paragraph
+    matches an input paragraph exactly, in order, nothing was modified and
+    nothing was invented, so every verdict is either "this survived unchanged"
+    or "this went".  A greedy left-to-right scan finds that alignment in O(n),
+    and greedy is not a heuristic here: if an in-order embedding exists at all,
+    matching each output paragraph to the earliest unused input paragraph finds
+    one.
+
+    Matching is on the paragraph **signature**, not its text, and that is the
+    difference between a fast path and a broken one.  Text equality is not
+    identity: a hidden note beside an identical visible requirement extracts
+    the same characters, so a text-only scan pairs the surviving *hidden* copy
+    with the plain paragraph and reports the note as the removal — turning the
+    loss of a requirement into a verified clean.  Both W04 discriminating cases
+    caught exactly that when this was written on text.
+
+    Signatures are stricter than text, which is the safe direction: a document
+    this rejects simply takes the ordinary path.
+
+    **Which** occurrence of a repeated signature it consumes is arbitrary, and
+    that is precisely the arbitrariness ``_attribute_removal`` already exists
+    to resolve.  The multiset of lost paragraphs is fixed by the two documents,
+    so the verdict does not depend on the scan's choice.
+
+    Returns ``None`` the moment the output is *not* a pure deletion — one
+    modified paragraph, one invented one, one reordering, one run reshaped —
+    and the ordinary comparison then runs unchanged.  This adds a fast path; it
+    removes no reasoning.
+    """
+    if len(output_paras) > len(input_paras):
+        return None            # something was added; not a deletion
+
+    signatures = [para.signature for para in input_paras]
+    kept: list[int] = []
+    index = 0
+    for para in output_paras:
+        wanted = para.signature
+        while index < len(signatures) and signatures[index] != wanted:
+            index += 1
+        if index == len(signatures):
+            return None        # not an in-order embedding
+        kept.append(index)
+        index += 1
+    return kept
+
+
+def _classify_pure_deletion(
+    input_paras: list[ParagraphInfo],
+    output_paras: list[ParagraphInfo],
+    kept: list[int],
+    result: VerificationResult,
+    strip_revisions: bool,
+    surviving_numbering: set[str],
+) -> None:
+    """Judge a pure deletion: every unpaired input paragraph is a removal.
+
+    Attribution runs exactly as it does on the general path, against the real
+    output.  Substituting the paired input paragraphs for it would be the
+    cleaner grading its own work with the evidence removed — the surviving
+    hidden copy and the plain one it stood in for have different signatures,
+    and that difference is the whole answer.
+    """
+    survived = set(kept)
+    lost = _lost_signatures(input_paras, output_paras)
+    attributed = set(survived)
+
+    for index, para in enumerate(input_paras):
+        if index in survived:
+            continue
+        info = _attribute_removal(para, input_paras, lost, attributed)
+        result.removed.append(_classify_removal(info, strip_revisions))
         if info.numbering and info.numbering in surviving_numbering:
             result.numbering.append(NumberingNotice(
                 part=info.part, numbering=info.numbering,
