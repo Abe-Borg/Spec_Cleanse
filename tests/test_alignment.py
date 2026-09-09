@@ -18,6 +18,7 @@ import unittest
 from unittest.mock import patch
 
 import verify
+from processor import DocxProcessor
 from verify import verify_clean
 
 from tests import docx_builder as db
@@ -128,14 +129,39 @@ class FastPathTests(DocxTestCase):
 class EquivalenceTests(DocxTestCase):
     """Every verdict must be the one the ordinary comparison would have given."""
 
-    def _both_paths(self, source_body, output_body):
+    def _both_paths(self, source_body, output_body, strip_revisions=False):
         engine = self.make_engine()
         source = db.build_docx(self.temp_dir / "in.docx", db.document(*source_body))
         output = db.build_docx(self.temp_dir / "out.docx", db.document(*output_body))
 
-        fast = verify_clean(source, output, engine=engine)
+        fast = verify_clean(source, output, engine=engine,
+                            strip_revisions=strip_revisions)
         with patch.object(verify, "_pure_deletion_pairing", return_value=None):
-            slow = verify_clean(source, output, engine=engine)
+            slow = verify_clean(source, output, engine=engine,
+                                strip_revisions=strip_revisions)
+        return fast, slow
+
+    def _cleaned(self, source_body, strip_revisions=False):
+        """Compare both paths on an output the cleaner really produced.
+
+        The independent-fixture rule applies to *damage* cases, where agreeing
+        with the cleaner proves nothing.  Here the question is the opposite —
+        whether a correct clean is reported as correct — so the clean itself is
+        the fixture.
+        """
+        engine = self.make_engine()
+        source = db.build_docx(self.temp_dir / "in.docx", db.document(*source_body))
+        output = self.temp_dir / "out.docx"
+        result = DocxProcessor(engine, strip_revisions=strip_revisions).process(
+            source, output
+        )
+        self.assertEqual(result.errors, [])
+
+        fast = verify_clean(source, output, engine=engine,
+                            strip_revisions=strip_revisions)
+        with patch.object(verify, "_pure_deletion_pairing", return_value=None):
+            slow = verify_clean(source, output, engine=engine,
+                                strip_revisions=strip_revisions)
         return fast, slow
 
     def _same(self, fast, slow) -> None:
@@ -203,6 +229,53 @@ class EquivalenceTests(DocxTestCase):
             [db.text_para(HEADING), db.text_para(REQUIREMENT)],
             [db.text_para(REQUIREMENT)],
         ))
+
+    def test_a_tracked_deleted_row_before_its_plain_twin_agrees(self):
+        # Identical signatures, different authority.  Accepting revisions
+        # removes the tracked row and nothing authorizes losing the plain one,
+        # so pairing on the signature alone reserved the *deleted* row as the
+        # survivor and called a correct clean damage.
+        fast, slow = self._cleaned([
+            db.text_para(HEADING),
+            db.table_of(
+                db.deleted_row(db.text_para(REQUIREMENT)),
+                db.row(db.text_para(REQUIREMENT)),
+            ),
+        ], strip_revisions=True)
+
+        self._same(fast, slow)
+        self.assertTrue(fast.passed, fast.removed)
+        self.assertEqual([r.category for r in fast.removed], ["tracked_deletion"])
+
+    def test_the_plain_row_before_its_tracked_twin_agrees(self):
+        # The other order, so the fix is not just an artefact of which came
+        # first.
+        fast, slow = self._cleaned([
+            db.text_para(HEADING),
+            db.table_of(
+                db.row(db.text_para(REQUIREMENT)),
+                db.deleted_row(db.text_para(REQUIREMENT)),
+            ),
+        ], strip_revisions=True)
+
+        self._same(fast, slow)
+        self.assertTrue(fast.passed, fast.removed)
+
+    def test_losing_the_plain_row_is_still_damage(self):
+        # The guard: the fix must not make every tracked-deletion document
+        # verify.  Here the output kept the *deleted* row and lost the plain
+        # one, which is the damage the pairing key exists to keep visible.
+        deleted = db.deleted_row(db.text_para(REQUIREMENT))
+        plain = db.row(db.text_para(REQUIREMENT))
+
+        fast, slow = self._both_paths(
+            [db.text_para(HEADING), db.table_of(deleted, plain)],
+            [db.text_para(HEADING), db.table_of(deleted)],
+            strip_revisions=True,
+        )
+
+        self._same(fast, slow)
+        self.assertFalse(fast.passed)
 
     def test_numbering_notices_agree(self):
         numbered = ('<w:pPr><w:numPr><w:ilvl w:val="0"/>'

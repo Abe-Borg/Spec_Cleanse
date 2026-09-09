@@ -144,6 +144,25 @@ class ParagraphInfo:
         """Characters trimmed from the front, mapping ``text`` offsets to raw."""
         return len(self.raw_text) - len(self.raw_text.lstrip())
 
+    @cached_property
+    def pair_key(self) -> tuple:
+        """What makes two paragraphs interchangeable for pairing.
+
+        The signature is document fact — text plus run properties — and carries
+        no policy, deliberately.  But a paragraph inside a tracked deletion is
+        *not* interchangeable with an identical one outside it, because the two
+        differ in what may be lost: accepting revisions removes the first and
+        nothing authorizes losing the second.
+
+        A deleted table row keeps ordinary ``w:t``, recording the deletion only
+        in ``w:trPr``, so its signature matches its plain twin exactly.  Pairing
+        on the signature alone therefore reserved the *deleted* row as the
+        survivor and reported the surviving plain one as lost — a correct clean
+        called damage.  This is the same lesson as text-versus-signature, one
+        level further in: identical is not interchangeable.
+        """
+        return (self.signature, self.in_tracked_deletion)
+
     @property
     def preserve_reason(self) -> str | None:
         """Why this paragraph is protected outright, pattern or style."""
@@ -849,16 +868,18 @@ def _pure_deletion_pairing(
     matching each output paragraph to the earliest unused input paragraph finds
     one.
 
-    Matching is on the paragraph **signature**, not its text, and that is the
+    Matching is on ``ParagraphInfo.pair_key``, not on text, and that is the
     difference between a fast path and a broken one.  Text equality is not
     identity: a hidden note beside an identical visible requirement extracts
     the same characters, so a text-only scan pairs the surviving *hidden* copy
     with the plain paragraph and reports the note as the removal — turning the
     loss of a requirement into a verified clean.  Both W04 discriminating cases
-    caught exactly that when this was written on text.
+    caught exactly that when this was written on text; a tracked-deleted table
+    row before its plain twin caught the same mistake one level further in,
+    which is why the key carries deletion authority as well as the signature.
 
-    Signatures are stricter than text, which is the safe direction: a document
-    this rejects simply takes the ordinary path.
+    The key is stricter than text, which is the safe direction: a document this
+    rejects simply takes the ordinary path.
 
     **Which** occurrence of a repeated signature it consumes is arbitrary, and
     that is precisely the arbitrariness ``_attribute_removal`` already exists
@@ -873,14 +894,14 @@ def _pure_deletion_pairing(
     if len(output_paras) > len(input_paras):
         return None            # something was added; not a deletion
 
-    signatures = [para.signature for para in input_paras]
+    keys = [para.pair_key for para in input_paras]
     kept: list[int] = []
     index = 0
     for para in output_paras:
-        wanted = para.signature
-        while index < len(signatures) and signatures[index] != wanted:
+        wanted = para.pair_key
+        while index < len(keys) and keys[index] != wanted:
             index += 1
-        if index == len(signatures):
+        if index == len(keys):
             return None        # not an in-order embedding
         kept.append(index)
         index += 1
@@ -923,11 +944,18 @@ def _classify_pure_deletion(
 def _lost_signatures(
     input_paras: list[ParagraphInfo], output_paras: list[ParagraphInfo]
 ) -> dict[str, Counter]:
-    """Per text, which paragraph signatures the output no longer has.
+    """Per text, which paragraph identities the output no longer has.
 
     A multiset difference, so two identical paragraphs that both survive are
     not mistaken for one.  This is what says *which* occurrence of a repeated
     text actually disappeared — a question the text alone cannot answer.
+
+    Keyed on ``pair_key`` rather than the bare signature, because deletion
+    authority is part of the answer.  A tracked-deleted table row keeps
+    ordinary ``w:t`` and matches its plain twin signature-for-signature, so on
+    the bare signature the two were interchangeable — and attribution then
+    blamed whichever came first, reporting `tracked_deletion` as an unexplained
+    loss when the plain row happened to precede the deleted one.
 
     Grouped in one pass per side rather than rescanning both for every distinct
     text.  The rescan was O(distinct x n), which on a document of mostly unique
@@ -937,11 +965,11 @@ def _lost_signatures(
     """
     before: dict[str, Counter] = defaultdict(Counter)
     for para in input_paras:
-        before[para.text][para.signature] += 1
+        before[para.text][para.pair_key] += 1
 
     after: dict[str, Counter] = defaultdict(Counter)
     for para in output_paras:
-        after[para.text][para.signature] += 1
+        after[para.text][para.pair_key] += 1
 
     lost: dict[str, Counter] = {}
     for text, counts in before.items():
@@ -981,8 +1009,11 @@ def _attribute_removal(
     and an identical hidden note had a *correct* clean reported as damage — the
     note was removed, and the plain copy was blamed.
 
-    The signatures say which paragraph is genuinely absent from the output, so
-    the verdict is taken against that one.  This only ever re-attributes among
+    The identities say which paragraph is genuinely absent from the output, so
+    the verdict is taken against that one — identity meaning the signature
+    *and* whether the paragraph sits inside a tracked deletion, because two
+    paragraphs that differ only in that are not interchangeable: one may be
+    lost and the other may not.  This only ever re-attributes among
     paragraphs whose text is already identical, and only to a signature the
     output really is missing; where the text occurs once there is nothing to
     choose and ``info`` is returned unchanged.
@@ -998,8 +1029,8 @@ def _attribute_removal(
     for index, para in same_text:
         if index in attributed:
             continue  # already paired with a survivor, or already blamed
-        if remaining.get(para.signature, 0) > 0:
-            remaining[para.signature] -= 1
+        if remaining.get(para.pair_key, 0) > 0:
+            remaining[para.pair_key] -= 1
             attributed.add(index)
             return para
     return info
