@@ -192,6 +192,32 @@ Coverage is also what `_classify_modification` requires: every lost interval mus
 `[Verify quantity]` authorizes cutting the placeholder and says nothing about the
 word `spare` beside it.
 
+**Repeated identical text breaks the alignment the intervals rest on, so one exact
+answer comes first.** A hidden note followed by an identical visible requirement
+extracts the same characters twice. When the cleaner removes the note, the survivor is
+equally consistent with *either* occurrence having gone, and `SequenceMatcher` simply
+picks the first — leaving the second interval unauthorized and a correct clean reported
+as damage.
+
+No rule reading text alone can fix this, because the correct clean and the
+corresponding damage produce **byte-identical text**; the difference is only which run
+survived. So `ParagraphEvidence.surviving_signature()` states the runs a correct clean
+would leave behind, and `docx_xml.paragraph_signature()` reads what the output actually
+has. Signatures are pure document fact — text plus raw `w:rPr` properties, no style
+resolution and no policy — because the question is narrow and syntactic: *are these two
+runs interchangeable?*
+
+Reading the output's structure is not a breach of the boundary above. What is forbidden
+is trusting the processor's account of its actions; the output package is the artifact
+being judged, and §10.3 requires establishing whether it "retains all protected content
+in order".
+
+**That path only ever accepts.** A mismatch falls through to the interval reasoning
+unchanged, so an output that kept the *hidden* copy while the visible requirement
+vanished is still reported. A paragraph whose runs were legitimately reshaped — an
+inline redaction rewrites run text — simply misses the fast path rather than being newly
+flagged.
+
 A protected paragraph is not touched by the cleaner at all — not redacted, not
 trimmed — so any loss inside one is a violation whatever the lost text looks like,
 judged on the original paragraph where the protection is visible.

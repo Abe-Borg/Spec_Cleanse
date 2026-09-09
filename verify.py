@@ -40,6 +40,7 @@ from docx_xml import (
     field_chars_balanced,
     cut_spans,
     iter_paragraphs,
+    paragraph_signature,
     load_config,
     load_styles,
     orphaned_range_markers,
@@ -85,6 +86,10 @@ class ParagraphInfo:
     """
     raw_text: str
     evidence: ParagraphEvidence
+    #: Signatures of this paragraph's text-carrying runs, as document fact.
+    #: Read from both sides, so the output can be compared run-for-run when
+    #: its extracted text is identical to more than one source arrangement.
+    signature: tuple = ()
     #: True if a tracked change marks this paragraph's container as deleted —
     #: a deleted table row keeps its text in plain w:t, so nothing else shows it.
     in_tracked_deletion: bool = False
@@ -287,6 +292,7 @@ def extract_paragraphs(
                         engine.paragraph_evidence(para) if evidence
                         else ParagraphEvidence(raw_text=raw_text)
                     ),
+                    signature=paragraph_signature(para),
                     in_tracked_deletion=_in_tracked_deletion(para),
                 ))
         return paragraphs
@@ -485,7 +491,7 @@ def verify_clean(
             paired.add(jdx)
             if intervals:
                 result.modified.append(
-                    _classify_modification(info, output_texts[jdx], intervals)
+                    _classify_modification(info, output_paras[jdx], intervals)
                 )
 
         # Anything in the replacement block that no input paragraph explains
@@ -600,7 +606,7 @@ def _classify_removal(
 
 def _classify_modification(
     info: ParagraphInfo,
-    after: str,
+    survivor: ParagraphInfo,
     intervals: list[tuple[int, int]],
 ) -> ModifiedParagraph:
     """Decide whether the text a surviving paragraph lost was meant to go.
@@ -613,13 +619,35 @@ def _classify_modification(
     A protected paragraph is not touched by the cleaner at all, so any loss
     inside one is a violation whatever the lost text looks like — judged on the
     original paragraph, which is the only place the protection is visible.
+
+    One exact answer comes before the intervals, because the intervals rest on
+    an alignment that repeated text can make arbitrary.  A paragraph holding a
+    hidden note and then an identical visible requirement extracts the same
+    characters twice; when the cleaner removes the note, the survivor is equally
+    consistent with either occurrence having gone, and ``SequenceMatcher``
+    simply picks one.  Comparing the output's own runs against the runs a
+    correct clean would leave settles it on evidence rather than on which
+    alignment the differ happened to choose.
+
+    That check only ever accepts.  When the signatures do not match, the
+    interval reasoning below runs unchanged — so an output keeping the *hidden*
+    copy while the visible requirement disappeared is still reported, which is
+    the case textual comparison alone cannot distinguish from a correct clean.
     """
+    after = survivor.text
     fragments = [info.text[start:end] for start, end in intervals]
 
     if info.preserve_reason is not None:
         return ModifiedParagraph(
             info.text, after, fragments, PRESERVE_VIOLATION, info.preserve_reason
         )
+
+    expected = info.evidence.surviving_signature()
+    if expected and survivor.signature == expected:
+        authorized = info.evidence.authorities()
+        if authorized:
+            category, pattern = _verdict(authorized)
+            return ModifiedParagraph(info.text, after, fragments, category, pattern)
 
     authorities: list[tuple[str, str, bool]] = []
     for start, end in intervals:

@@ -527,6 +527,55 @@ class InjectedDamageTests(DocxTestCase):
         self.assertEqual(len(result.preserve_violations), 1, result.removed)
         self.assertFalse(result.passed)
 
+    def test_a_repeated_identical_run_does_not_make_a_correct_clean_suspect(self):
+        """Ambiguous alignment must not be reported as damage.
+
+        A hidden note followed by an identical visible requirement extracts the
+        same characters twice.  Removing the note is correct, but the survivor
+        is equally consistent with either occurrence having gone, and
+        ``SequenceMatcher`` assigns the deletion to the first — leaving the
+        second interval unauthorized and a correct clean marked needs-review.
+
+        This is cleaned **for real**: the point is what the cleaner actually
+        produces, not a hand-built output that assumes the answer.
+        """
+        source = self.build(
+            db.document(db.para(db.run("Keep. ", vanish=True), db.run("Keep. "))),
+            name="ambig_in.docx")
+        engine = self.make_engine()
+        _, cleaned = self.clean(source, engine)
+
+        result = verify_clean(source, cleaned, engine=engine)
+
+        self.assertTrue(result.passed, result.modified)
+        self.assertEqual(len(result.expected_modifications), 1, result.modified)
+        self.assertEqual(result.modified[0].category, "hidden_text")
+
+    def test_the_same_text_is_damage_when_the_hidden_copy_is_what_survived(self):
+        """The discriminating case, and why the check has to be structural.
+
+        This output and the correct clean above extract **byte-identical text**
+        — the difference is only which run survived.  Here the visible
+        requirement went and the hidden copy stayed, so the reader lost it.  No
+        rule reading text alone can separate the two, which is why the accept
+        path compares the output's own runs against the runs a correct clean
+        would leave.
+        """
+        phrase = "Isolation valves are required. "
+        source = self.build(
+            db.document(db.para(db.run(phrase), db.run(phrase, vanish=True),
+                                db.run("Provide access panels."))),
+            name="ambig_dmg_in.docx")
+        damaged = self.build(
+            db.document(db.para(db.run(phrase, vanish=True),
+                                db.run("Provide access panels."))),
+            name="ambig_dmg_out.docx")
+
+        result = verify_clean(source, damaged, engine=self.make_engine())
+
+        self.assertEqual(len(result.unexpected_modifications), 1, result.modified)
+        self.assertFalse(result.passed)
+
     def test_v12_reordering_protected_clauses_is_not_a_deletion(self):
         """V12 — nothing was removed, and the document is still wrong."""
         result = self.damage(

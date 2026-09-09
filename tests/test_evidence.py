@@ -20,6 +20,7 @@ from pathlib import Path
 from detection import ParagraphEvidence, RunEvidence, WHITESPACE_ONLY
 from docx_xml import (
     iter_paragraphs,
+    paragraph_signature,
     load_styles,
     paragraph_text,
     parse_xml,
@@ -214,6 +215,47 @@ class SpanAuthorityShape(unittest.TestCase):
         self.assertEqual(evidence.authorized_spans(), [])
         self.assertFalse(evidence.covers_all_text())
         self.assertFalse(evidence.authorizes_whole_paragraph())
+
+
+class RunSignatures(EvidenceCase):
+    """Signatures say whether two runs are interchangeable, nothing more."""
+
+    def _signatures(self, xml):
+        src = self.build(db.document(xml), {"word/styles.xml": STYLES},
+                         name=f"sig{abs(hash(xml))}.docx")
+        _, paragraphs = self._paragraphs(src)
+        return paragraph_signature(paragraphs[0])
+
+    def test_identical_text_with_different_formatting_is_distinguishable(self):
+        """The whole point: same characters, different run, different signature."""
+        first, second = self._signatures(
+            db.para(db.run("Keep. ", vanish=True), db.run("Keep. ")))
+
+        self.assertEqual(first[0], second[0], "the text really is identical")
+        self.assertNotEqual(first, second, "hidden must separate them")
+
+    def test_identical_runs_have_identical_signatures(self):
+        first, second = self._signatures(db.para(db.run("Keep. "), db.run("Keep. ")))
+
+        self.assertEqual(first, second)
+
+    def test_style_colour_italic_and_bold_all_separate_runs(self):
+        for label, run in (
+            ("style", db.run("X", rstyle="SpecifierNote")),
+            ("colour", db.run("X", color="FF0000")),
+            ("italic", db.run("X", italic=True)),
+            ("bold", db.run("X", bold=True)),
+        ):
+            with self.subTest(label):
+                plain, marked = self._signatures(db.para(db.run("X"), run))
+                self.assertNotEqual(plain, marked, f"{label} must separate runs")
+
+    def test_runs_without_substantive_text_are_left_out(self):
+        """An empty run carries structure, not content."""
+        signatures = self._signatures(
+            db.para(db.run("Real text."), db.run(""), db.run("   ")))
+
+        self.assertEqual(len(signatures), 1)
 
 
 class OffsetIntegrity(EvidenceCase):

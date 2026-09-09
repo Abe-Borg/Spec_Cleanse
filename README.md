@@ -261,6 +261,16 @@ After cleaning, SpecCleanse compares the input and output and reports:
   whether a lost fragment *resembles* something removable cannot tell which
   occurrence actually went.
 
+  When a paragraph holds the same text twice, positions alone are not enough
+  either. A hidden note followed by an identical visible requirement extracts
+  the same characters twice, so an output holding one copy is consistent with
+  either having gone — and those two outcomes are a correct clean and a lost
+  requirement, with byte-identical text. Verification therefore compares the
+  output's own runs against the runs a correct clean would leave. That
+  comparison only ever accepts: where it does not match, the positional check
+  runs unchanged, so keeping the hidden copy while the visible requirement
+  disappears is still reported.
+
   A protected paragraph is not touched by the cleaner at all — not redacted, not
   trimmed — so any loss inside one is a violation whatever the lost text looks
   like, judged on the original paragraph where the protection is visible.

@@ -18,6 +18,7 @@ from docx_xml import (
     fold_style_names,
     is_on,
     iter_own_runs,
+    run_signature,
     layout_break_offsets,
     merge_spans,
     paragraph_text,
@@ -98,6 +99,8 @@ class RunEvidence:
     reason: str | None = None
     #: True when the detection crossed the threshold on formatting alone.
     formatting_only: bool = False
+    #: This run's identity as document fact — see ``docx_xml.run_signature``.
+    signature: tuple = ()
 
     @property
     def authorized(self) -> bool:
@@ -168,6 +171,21 @@ class ParagraphEvidence:
         return all(
             covered[idx] or not char.strip()
             for idx, char in enumerate(self.raw_text)
+        )
+
+    def surviving_signature(self) -> tuple:
+        """Signatures of the runs a correct clean would leave behind.
+
+        Every run policy did *not* authorize, in order.  Comparing this against
+        the output's own run signatures answers the question extracted text
+        cannot: which of two identical occurrences survived.  It is only ever
+        used to *accept* — a mismatch falls back to interval reasoning, so a
+        paragraph whose runs the cleaner legitimately reshaped is not newly
+        reported as damage.
+        """
+        return tuple(
+            run.signature for run in self.runs
+            if not run.authorized and run.signature and run.signature[0].strip()
         )
 
     def authorities(self) -> list[tuple[str, str, bool]]:
@@ -902,8 +920,10 @@ class DetectionEngine:
                     )
                     category, reason = best.content_type.value, best.reason
                     formatting_only = best.formatting_only
-            runs.append(
-                RunEvidence(start, offset, text, category, reason, formatting_only))
+            runs.append(RunEvidence(
+                start, offset, text, category, reason, formatting_only,
+                run_signature(run),
+            ))
 
         return ParagraphEvidence(
             raw_text=raw_text,

@@ -46,6 +46,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   revision somewhere nearby is not blanket permission, and with the option off
   the authority does not exist at all.
 
+- Repeated identical text no longer makes a correct clean look like damage. A
+  hidden note followed by an identical visible requirement extracts the same
+  characters twice; removing the note is correct, but the difference algorithm
+  assigns the deletion to the first occurrence and left the second unexplained.
+  Verification now compares the output's own runs against the runs a correct
+  clean would leave, which is the only evidence that separates this from the
+  case where the *visible* requirement was lost and the hidden copy survived —
+  the two produce byte-identical text. The comparison only ever accepts; where
+  it does not match, the positional check runs unchanged.
+
 - Disabling a detector now removes its permission as well as its removals.
   Turning hidden-text detection off means hidden formatting no longer excuses a
   loss in the output.
@@ -95,6 +105,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `docx_xml.run_signature()` and `paragraph_signature()` — a run's identity as
+  document fact: its text plus its raw `w:rPr` properties, no style resolution
+  and no policy. They answer whether two runs are interchangeable.
 - `docx_xml.layout_break_offsets()`, shared by the processor (which refuses to
   cut a placeholder across a page or column break) and by verification (which
   must not then claim the cut was permitted). The processor's private copy is
