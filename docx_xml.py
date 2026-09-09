@@ -1175,6 +1175,25 @@ class StyleIndex:
 #: Config keys whose values are lists of regular expressions.
 PATTERN_KEYS = ("text_patterns", "low_confidence_patterns", "inline_patterns")
 
+#: Section keys whose value is a list of style names.
+STYLE_KEYS = ("character_styles", "paragraph_styles", "preserve_styles")
+
+#: Every section key that must hold a list, and every one that must hold a
+#: mapping.  Both exist for one reason: a key *present with a null value* is
+#: not the same as an absent one, and used to be treated as if it were.
+#:
+#: ``colors:`` with nothing after it is ``None`` in YAML.  Skipping it here left
+#: every reader to do ``.get(key, default)``, which hands back the stored
+#: ``None`` rather than the default — so the mistake surfaced per file, deep in
+#: detection, as ``'NoneType' object is not iterable`` naming no section, key or
+#: line.  Six spellings did that, each with a different exception.
+#:
+#: They are normalised to the empty value rather than refused, because an absent
+#: key already means "empty" to every reader, and someone who deleted the last
+#: entry from a list wrote something coherent.
+LIST_KEYS = PATTERN_KEYS + STYLE_KEYS
+MAPPING_KEYS = ("formatting_signals",)
+
 #: Config keys that switch behaviour on or off, wherever they appear in a
 #: section.  Checked because YAML quietly makes ``'false'`` a *string*, and
 #: every reader here asks a plain truthiness question — so a quoted "off"
@@ -1263,13 +1282,28 @@ def load_config(config_path: Path) -> dict:
     for section_name, section in config.items():
         if not isinstance(section, dict):
             continue
-        for key in PATTERN_KEYS:
-            values = section.get(key)
-            if values is None:
+        for key in LIST_KEYS:
+            if key not in section:
                 continue
-            if not isinstance(values, list):
-                raise ValueError(f"{section_name}.{key} must be a list of patterns")
-            compile_patterns(values, f"{section_name}.{key}")
+            if section[key] is None:
+                section[key] = []
+                continue
+            if not isinstance(section[key], list):
+                kind = "patterns" if key in PATTERN_KEYS else "style names"
+                raise ValueError(f"{section_name}.{key} must be a list of {kind}")
+            if key in PATTERN_KEYS:
+                compile_patterns(section[key], f"{section_name}.{key}")
+
+        for key in MAPPING_KEYS:
+            if key not in section:
+                continue
+            if section[key] is None:
+                section[key] = {}
+            elif not isinstance(section[key], dict):
+                raise ValueError(
+                    f"{section_name}.{key} must be a mapping, got "
+                    f"{type(section[key]).__name__}"
+                )
 
         for key in BOOLEAN_KEYS:
             if key in section and not isinstance(section[key], bool):
@@ -1280,16 +1314,19 @@ def load_config(config_path: Path) -> dict:
                 )
 
         signals = section.get("formatting_signals")
-        if isinstance(signals, dict) and signals.get("colors") is not None:
+        if isinstance(signals, dict) and "colors" in signals:
             colors = signals["colors"]
             where = f"{section_name}.formatting_signals.colors"
-            if not isinstance(colors, list):
+            if colors is None:
+                signals["colors"] = []
+            elif not isinstance(colors, list):
                 raise ValueError(f"{where} must be a list of colours")
-            # Normalised in place, so every reader downstream compares against
-            # one shape and no caller has to remember to do this itself.
-            signals["colors"] = [
-                normalise_color(color, f"{where}[{index}]")
-                for index, color in enumerate(colors)
-            ]
+            else:
+                # Normalised in place, so every reader downstream compares
+                # against one shape and no caller has to remember to do this.
+                signals["colors"] = [
+                    normalise_color(color, f"{where}[{index}]")
+                    for index, color in enumerate(colors)
+                ]
 
     return config

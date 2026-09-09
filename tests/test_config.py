@@ -205,6 +205,71 @@ class ConfigValidationTests(DocxTestCase):
                 "specifier_notes:\n  formatting_signals:\n    colors: 'FF0000'\n"
             ))
 
+    # -- Present, but null ---------------------------------------------------
+    #
+    # A key written with nothing after it is None in YAML, and used to be
+    # skipped as though it were absent.  Every reader asks with
+    # ``.get(key, default)``, which hands back the stored None rather than the
+    # default, so the mistake surfaced per file deep in detection with a
+    # message naming no section, key or line.  Six spellings did that, each
+    # with a different exception; they are normalised to the empty value here,
+    # because an absent key already means "empty" to every reader.
+
+    def _detects(self, config) -> None:
+        """Run a detection that touches colours and styles, as a real clean would."""
+        run = etree.fromstring(
+            db.run("Coordinate with Division 26.", italic=True, color="FF0000",
+                   rstyle="CMT")
+            .replace("<w:r>", f'<w:r xmlns:w="{W_NS}">', 1).encode("utf-8")
+        )
+        DetectionEngine(config).detect_in_element(run, "Coordinate with Division 26.")
+
+    def test_a_null_colour_list_becomes_an_empty_one(self):
+        config = load_config(self._write(
+            "specifier_notes:\n  formatting_signals:\n    colors:\n"
+        ))
+
+        self.assertEqual(config["specifier_notes"]["formatting_signals"]["colors"], [])
+        self._detects(config)  # used to raise TypeError per file
+
+    def test_null_formatting_signals_become_an_empty_mapping(self):
+        config = load_config(self._write("specifier_notes:\n  formatting_signals:\n"))
+
+        self.assertEqual(config["specifier_notes"]["formatting_signals"], {})
+        self._detects(config)  # used to raise AttributeError per file
+
+    def test_formatting_signals_of_the_wrong_type_is_refused(self):
+        # No empty reading to fall back on, so this one is a mistake rather
+        # than an omission.
+        with self.assertRaisesRegex(ValueError, "must be a mapping"):
+            load_config(self._write("specifier_notes:\n  formatting_signals: 'red'\n"))
+
+    def test_a_null_pattern_list_becomes_an_empty_one(self):
+        # Pre-dates the colour work: the pattern loop skipped a null value too.
+        config = load_config(self._write("specifier_notes:\n  text_patterns:\n"))
+
+        self.assertEqual(config["specifier_notes"]["text_patterns"], [])
+        self._detects(config)
+
+    def test_null_style_lists_become_empty_ones(self):
+        for key in ("character_styles", "paragraph_styles", "preserve_styles"):
+            with self.subTest(key):
+                config = load_config(self._write(
+                    f"specifier_notes:\n  text_patterns: []\n  {key}:\n"
+                ))
+
+                self.assertEqual(config["specifier_notes"][key], [])
+                self._detects(config)
+
+    def test_a_style_list_of_the_wrong_type_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "must be a list of style names"):
+            load_config(self._write("specifier_notes:\n  character_styles: 'CMT'\n"))
+
+    def test_a_pattern_list_of_the_wrong_type_is_still_refused(self):
+        # The guard that normalising null did not loosen the type check.
+        with self.assertRaisesRegex(ValueError, "must be a list of patterns"):
+            load_config(self._write("specifier_notes:\n  text_patterns: 'x'\n"))
+
     def test_a_style_name_absent_from_any_one_document_is_not_an_error(self):
         # §15.2 is explicit: styles differ across templates, so a name that no
         # sample document happens to use says nothing about the config.
