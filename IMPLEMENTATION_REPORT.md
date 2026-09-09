@@ -1,7 +1,11 @@
 # SpecCleanse implementation report
 
-Final report for the work packages defined in `SPECCLEANSE_IMPLEMENTATION_PLAN.md`,
-required by §17.5.
+Final report for the work packages W00–W10, required by §17.5 of the implementation
+plan those packages came from. That plan has been removed from the repository now
+that the work is done, so the `§` references below — and the three in `CLAUDE.md` —
+name sections of a document this repository no longer carries. They are kept as
+written because renumbering them would not make them resolvable, and the surrounding
+sentences say what each one required.
 
 **No release tag, push, publication, or deployment is part of this report.** The
 work is on `master`; cutting a version remains a separate decision.
