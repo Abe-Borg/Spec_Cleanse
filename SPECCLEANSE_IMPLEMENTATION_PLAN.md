@@ -1135,6 +1135,54 @@ revisions legitimately remove that field and the source revision evidence explai
 **Exit gate:** exact text assertions and XML-carrier assertions pass; no field, section, or picture
 preservation regression; Word validation cases are queued for W10.
 
+### 12.4 What W05 found
+
+**§12.1 needed no new work.** X01–X04 were measured against real cleans first and all four already
+behaved correctly — W00's element-aware redaction reaches a placeholder crossing a hyperlink wrapper,
+one split across `w:t` nodes, and a run scheduled for both redaction and removal, and the page-break
+policy holds under each. X01 and X02 were already pinned; X03 and X04 are pinned now.
+
+**§12.2 was the whole package, and reproduced exactly as written.** `has_embedded_content()` returns
+True for a complex field and False for the character-identical simple one, so an editorial paragraph
+whose only field was simple was deleted whole, taking a live cross-reference with it — and because the
+paragraph's text was exactly what the rule asked to remove, verification passed. X06 confirmed the
+second half: with the text unchanged and the carrier stripped, verification reported nothing at all.
+
+The two halves are independent and were fixed independently, which the tests check by disabling each
+in turn: removing `w:fldSimple` from `EMBEDDED_CONTENT_TAGS` fails three tests, and neutering the
+field comparison fails three others.
+
+Fields are compared by instruction and **per part**, per §12.2, not by a document-wide count — the
+same reasoning as W04's locations, arrived at for the same reason. Instructions are normalised because
+Word splits a complex one across `w:instrText` nodes at arbitrary points, so ` REF ` + `Target ` and
+` REF Target ` are one field written two ways.
+
+No field instruction is rewritten and no field value is updated programmatically, per §12.2. The
+caveat that section asks for is documented in `CLAUDE.md` and the changelog: keeping a wrapper is not
+a promise about its value, because Word recalculates on refresh.
+
+**Review round.** Two further defects, both reproduced before fixing, and both in the inventory this
+package introduced:
+
+- *Nested fields collapsed into one entry.* A field inside another field's result is its own carrier.
+  Accumulating instructions into one buffer and emitting when the nesting closed merged them, so an
+  output that lost the inner field's `w:fldChar` pair — keeping its instruction text and cached
+  result — produced an **identical** inventory. A stack fixes it.
+- *`w:moveFrom` was left out of the accepted-revision exemption.* `accept_revisions()` removes both
+  `w:del` and `w:moveFrom`, but the ancestry check named only `w:del`, so a field inside an accepted
+  move was reported lost from a correct run.
+
+The second exposed a **pre-existing** false alarm one level up, unrelated to fields: `w:moveFrom` is
+the only revision whose content reaches the *text* comparison, because a deleted run hides its text in
+`w:delText` that no extractor reads while the source half of a move keeps real `w:t`. So accepting a
+move reported its paragraph as an unexplained removal whatever it contained. Fixed here rather than
+deferred, because the finding's stated symptom — a correct revision-accepting run requiring review —
+persists until both halves are closed.
+
+Both fixes are the same lesson as the first half of this package: **a second, shorter list of an
+answer drifts from the first.** `in_tracked_deletion()` now reads `REVISION_DELETE_TAGS` rather than
+naming a subset of it.
+
 ## 13. W06: reference integrity, revision-empty tables, and numbering notices
 
 ### 13.1 Referenced bookmark targets — detect and report first

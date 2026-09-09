@@ -38,6 +38,40 @@ class InlineRedactionTests(DocxTestCase):
             ["Manufacturer: or approved equal."],
         )
 
+    def test_placeholder_crossing_a_hyperlink_wrapper(self):
+        """X03 — the span crosses a wrapper boundary as well as run boundaries.
+
+        ``iter_own_runs`` reaches into ``w:hyperlink``, so the offsets stay
+        continuous across it; a walk that stopped at the wrapper would compute
+        the span against a different string than the one the pattern matched.
+        """
+        path = self.build(db.document(
+            db.para(db.run("Provide ["), db.hyperlink(db.run("Verify quan")),
+                    db.run("tity] units.")),
+            db.text_para("Anchor."),
+        ))
+        _, out = self.clean(path)
+
+        self.assertEqual(self.paragraph_texts(out), ["Provide units.", "Anchor."])
+
+    def test_a_run_both_redacted_and_removed_takes_no_neighbours_with_it(self):
+        """X04 — a hidden run that also holds a placeholder.
+
+        Redaction and run removal are scheduled against the same run.  The
+        removal wins and takes the whole run, and the requirement either side of
+        it survives: no double-removal error, and no lost neighbour.
+        """
+        path = self.build(db.document(
+            db.para(db.run("Provide "),
+                    db.run("[Verify quantity] note", vanish=True),
+                    db.run(" units.")),
+            db.text_para("Anchor."),
+        ))
+        result, out = self.clean(path)
+
+        self.assertEqual(result.errors, [])
+        self.assertEqual(self.paragraph_texts(out), ["Provide  units.", "Anchor."])
+
     def test_paragraph_of_nothing_but_placeholders_is_removed(self):
         path = self.build(db.document(
             db.text_para("Keep this requirement."),

@@ -144,6 +144,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the paragraph's full identity including its `w:pStyle`. They answer whether two
   runs, or two paragraphs, are interchangeable.
 - `docx_xml.note_identity()` and `paragraph_style()`.
+- `docx_xml.field_instructions()` and `in_tracked_deletion()`.
 - `docx_xml.layout_break_offsets()`, shared by the processor (which refuses to
   cut a placeholder across a page or column break) and by verification (which
   must not then claim the cut was permitted). The processor's private copy is
@@ -210,6 +211,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
 
 ### Fixed
+
+- **A simple field no longer protects nothing.** Word writes a field two ways: as
+  one `w:fldSimple` carrying its instruction in an attribute, or as a run sequence
+  delimited by `w:fldChar` with the instruction in `w:instrText`. Only the second
+  was recognised as a carrier, so an editorial paragraph whose one field was
+  simple was deleted whole and took a live cross-reference with it. Because the
+  paragraph's text was exactly what the rule asked to remove, nothing reported
+  the loss. Such a paragraph is now emptied in place, keeping the instruction and
+  its wrapper.
+
+- A field nested inside another field's result is counted as its own carrier.
+  Instructions were accumulated into one buffer and emitted when the nesting
+  closed, which merged the two, so an output that lost the inner field's
+  `w:fldChar` pair — keeping its instruction text and cached result — produced an
+  identical inventory and the loss was invisible.
+
+- Accepting a tracked **move** is no longer reported as damage. `w:moveFrom` is
+  the one revision whose content reaches the text comparison as ordinary `w:t`,
+  because a deleted run hides its text in `w:delText` that no extractor reads. So
+  a correct revision-accepting run was reported as an unexplained removal, and any
+  field inside the move as a lost carrier. The check now reads
+  `REVISION_DELETE_TAGS` rather than naming `w:del` itself, and asks at paragraph
+  scope whether every text-carrying run sits inside a revision whose content goes.
+
+- Verification can see a field carrier disappear even when the text is unchanged.
+  A stripped field leaves the same characters behind, so no text comparison
+  notices; what is lost is the live reference. Fields are compared by instruction
+  and **per part**, not as a document-wide count, so a field lost from a header is
+  not answered by an identical one in the body. Instructions are normalised,
+  because Word splits a complex one across `w:instrText` nodes at arbitrary
+  points. A field inside a tracked deletion is exempt when revisions are being
+  accepted — the source revision explains its absence.
+
+  Keeping a wrapper is not a promise about its value: Word recalculates fields on
+  refresh, so a preserved-but-emptied result may come back. What is promised is
+  that the instruction is still there to recalculate from.
 
 - Two selected documents sharing a basename mapped to one destination when a
   common output folder was chosen, and the second clean silently replaced the

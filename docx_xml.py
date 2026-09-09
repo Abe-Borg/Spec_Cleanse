@@ -12,6 +12,7 @@ text string the detectors match against.  It holds no detection policy.
 """
 
 import re
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +84,7 @@ EMBEDDED_CONTENT_TAGS = frozenset({
     f"{W}pict",
     f"{W}object",
     f"{W}fldChar",
+    f"{W}fldSimple",
     f"{W}instrText",
     f"{W}footnoteReference",
     f"{W}endnoteReference",
@@ -266,6 +268,78 @@ def has_embedded_content(elem: etree._Element) -> bool:
 #: ``w:br/@w:type`` values that move content instead of just wrapping it.  A
 #: break with no type, or ``textWrapping``, is a soft line break.
 LAYOUT_BREAK_TYPES = frozenset({"page", "column"})
+
+
+def in_tracked_deletion(node: etree._Element) -> bool:
+    """True if accepting revisions would take ``node`` with it.
+
+    Covers every markup that carries content away: the inline wrappers in
+    :data:`REVISION_DELETE_TAGS` — ``w:del`` and ``w:moveFrom``, the *source*
+    half of a move — a deleted table row recording it in ``w:trPr``, and a
+    deleted cell in ``w:tcPr``.
+
+    It reads that tuple rather than naming ``w:del`` itself, because the
+    question here is exactly "does :func:`accept_revisions` remove this?" and
+    a second, shorter list of the answer drifted from the first: a field inside
+    a tracked move was reported lost from a run that had correctly accepted the
+    move.
+    """
+    while node is not None:
+        if node.tag in REVISION_DELETE_TAGS:
+            return True
+        if node.tag == f"{W}tr" and node.find(f"{W}trPr/{W}del") is not None:
+            return True
+        if node.tag == TC_TAG and node.find(f"{W}tcPr/{W}cellDel") is not None:
+            return True
+        node = node.getparent()
+    return False
+
+
+def field_instructions(scope: etree._Element, skip_deleted: bool = False) -> Counter:
+    """Every field instruction inside ``scope``, however the field is written.
+
+    Word records the same field two ways.  A *simple* field is one
+    ``w:fldSimple`` carrying its instruction in ``w:instr``; a *complex* one is
+    a run sequence delimited by ``w:fldChar``, with the instruction spread over
+    ``w:instrText`` nodes in between.  A count of one kind says nothing about
+    the other, which is how a document could lose a simple field and still look
+    intact.
+
+    Instructions are whitespace-normalised, because Word splits them across
+    ``w:instrText`` nodes at arbitrary points.  A Counter rather than a set: a
+    document may legitimately hold the same field twice, and losing one of them
+    is still a loss.
+
+    ``skip_deleted`` leaves out fields inside a tracked deletion, which a run
+    that accepts revisions removes legitimately — the source revision is the
+    evidence that explains their absence from the output.
+    """
+    found: Counter = Counter()
+
+    for field in scope.iter(f"{W}fldSimple"):
+        if skip_deleted and in_tracked_deletion(field):
+            continue
+        found[" ".join((field.get(f"{W}instr") or "").split())] += 1
+
+    # A stack, not a depth counter: a field nested in another field's result is
+    # its own carrier.  Accumulating into one buffer merged the two
+    # instructions and emitted a single entry, so stripping the inner field's
+    # begin/end while leaving its instruction text behind produced an identical
+    # inventory — the loss of a live nested field was invisible.
+    open_fields: list[tuple[list[str], bool]] = []
+    for node in scope.iter(f"{W}fldChar", f"{W}instrText"):
+        if node.tag == f"{W}instrText":
+            if open_fields:
+                open_fields[-1][0].append(node.text or "")
+            continue
+        kind = node.get(f"{W}fldCharType")
+        if kind == "begin":
+            open_fields.append(([], skip_deleted and in_tracked_deletion(node)))
+        elif kind == "end" and open_fields:
+            parts, deleted = open_fields.pop()
+            if not deleted:
+                found[" ".join("".join(parts).split())] += 1
+    return found
 
 
 def is_layout_break(node: etree._Element) -> bool:

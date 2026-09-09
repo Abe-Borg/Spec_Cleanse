@@ -38,10 +38,14 @@ from docx_xml import (
     block_children,
     collect_content_parts,
     field_chars_balanced,
+    field_instructions,
+    in_tracked_deletion,
+    iter_own_runs,
     iter_paragraphs,
     note_identity,
     paragraph_signature,
     run_profile,
+    run_text,
     load_config,
     load_styles,
     orphaned_range_markers,
@@ -203,6 +207,11 @@ class StructureReport:
     """What an inspection of one DOCX found."""
     issues: Counter = field(default_factory=Counter)
     section_breaks: int = 0
+    #: Field carriers keyed by ``(part, instruction)``.  Per part, because a
+    #: field lost from the body is not answered by an identical one in a
+    #: header; by instruction rather than by a count, because a document-wide
+    #: total hides one field going while another arrives.
+    fields: Counter = field(default_factory=Counter)
 
 
 @dataclass
@@ -338,27 +347,31 @@ def extract_paragraphs(
 
 
 def _in_tracked_deletion(para: etree._Element) -> bool:
-    """True if a tracked change marks the row or cell holding this paragraph.
+    """True if accepting revisions would take this paragraph's text.
 
-    Run-level deletions hide their text in ``w:delText``, which no extractor
-    reads, so they never reach the comparison.  A deleted *row* is different:
-    its text stays ordinary ``w:t`` and only ``w:trPr`` records the deletion.
+    Two shapes reach the comparison, and only one of them used to be checked.
+
+    The *container* may be marked deleted — a table row records it in
+    ``w:trPr``, a cell in ``w:tcPr`` — and its text stays ordinary ``w:t``,
+    which is why it arrives here at all.
+
+    Or every run carrying text may sit inside a revision whose content goes.
+    ``w:del`` never shows up this way, because a deleted run holds ``w:delText``
+    that no extractor reads; ``w:moveFrom`` does, because the source half of a
+    move keeps real ``w:t`` until the move is accepted.  So accepting a tracked
+    move made its paragraph look like an unexplained removal.
     """
-    node = para
-    while node is not None:
-        if node.tag == f"{W}tr" and node.find(f"{W}trPr/{W}del") is not None:
-            return True
-        if node.tag == TC_TAG and node.find(f"{W}tcPr/{W}cellDel") is not None:
-            return True
-        node = node.getparent()
-    return False
+    if in_tracked_deletion(para):
+        return True
+    runs = [run for run in iter_own_runs(para) if run_text(run).strip()]
+    return bool(runs) and all(in_tracked_deletion(run) for run in runs)
 
 
 # =============================================================================
 # Structural inspection
 # =============================================================================
 
-def inspect_structure(docx_path: Path) -> StructureReport:
+def inspect_structure(docx_path: Path, strip_revisions: bool = False) -> StructureReport:
     """Inspect a DOCX for structure Word will refuse to open.
 
     Pattern matching cannot see any of this: a footer emptied of block
@@ -389,6 +402,9 @@ def inspect_structure(docx_path: Path) -> StructureReport:
 
             report.section_breaks += sum(1 for _ in root.iter(f"{W}sectPr"))
 
+            for instruction, count in field_instructions(root, strip_revisions).items():
+                report.fields[(part, instruction)] += count
+
         return report
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -403,13 +419,15 @@ def lint_structure(docx_path: Path) -> list[str]:
     ]
 
 
-def _compare_structure(input_path: Path, output_path: Path) -> list[StructuralViolation]:
+def _compare_structure(
+    input_path: Path, output_path: Path, strip_revisions: bool = False
+) -> list[StructuralViolation]:
     """Report structural damage the output has and the input did not.
 
     Documents arrive with oddities of their own; only what the clean added is
     the clean's fault.
     """
-    before = inspect_structure(input_path)
+    before = inspect_structure(input_path, strip_revisions)
     after = inspect_structure(output_path)
 
     violations = [
@@ -423,6 +441,17 @@ def _compare_structure(input_path: Path, output_path: Path) -> list[StructuralVi
         violations.append(
             StructuralViolation("section break(s) lost from the document", lost_sections)
         )
+
+    # A field carrier can vanish while the text stays identical — the cached
+    # result reads as ordinary words, so nothing else in the comparison sees it
+    # go.  Losing one turns a live cross-reference into a frozen string.
+    for (part, instruction), count in sorted(before.fields.items()):
+        lost = count - after.fields[(part, instruction)]
+        if lost > 0:
+            shown = instruction or "(no instruction)"
+            violations.append(
+                StructuralViolation(f"{part}: field lost — {{{shown}}}", lost)
+            )
 
     return violations
 
@@ -504,7 +533,7 @@ def verify_clean(
         output_path=output_path,
         input_paragraph_count=len(input_texts),
         output_paragraph_count=len(output_texts),
-        structural=_compare_structure(input_path, output_path),
+        structural=_compare_structure(input_path, output_path, strip_revisions),
     )
 
     for location in _locations(input_paras, output_paras):
