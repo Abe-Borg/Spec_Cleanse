@@ -33,6 +33,7 @@ from lxml import etree
 from detection import DetectionEngine, ParagraphEvidence
 from docx_xml import (
     P_TAG,
+    TBL_TAG,
     TC_TAG,
     W,
     block_children,
@@ -406,6 +407,13 @@ def inspect_structure(docx_path: Path, strip_revisions: bool = False) -> Structu
                     report.issues[f"{part}: <w:{tag}> left with no block-level content"] += 1
                 elif container.tag == TC_TAG and blocks[-1].tag != P_TAG:
                     report.issues[f"{part}: table cell does not end with a paragraph"] += 1
+
+            for table in root.iter(TBL_TAG):
+                if not any(child.tag == f"{W}tr" for child in table):
+                    report.issues[f"{part}: <w:tbl> left with no rows"] += 1
+            for row in root.iter(f"{W}tr"):
+                if not any(child.tag == TC_TAG for child in row):
+                    report.issues[f"{part}: <w:tr> left with no cells"] += 1
 
             if not field_chars_balanced(root):
                 report.issues[f"{part}: unbalanced field characters"] += 1

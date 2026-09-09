@@ -790,6 +790,44 @@ def _accept_structural_deletions(root: etree._Element) -> int:
                 if not any(child.tag == TC_TAG for child in row):
                     row.getparent().remove(row)
 
+    return changed + _remove_rowless_tables(root)
+
+
+def _remove_rowless_tables(root: etree._Element) -> int:
+    """Remove tables that accepting revisions left with no rows.
+
+    Deleting a table's last row already worked; the ``w:tbl`` around it stayed,
+    holding nothing.  Word does not accept a table with no rows, and neither
+    lint nor verification could see one — so the package looked clean and the
+    file did not open.
+
+    Nesting needs no special traversal here: a table with no rows has no cells,
+    so it can hold no inner table.  It is always a leaf, and the rows above were
+    collected into a list before any of them were removed.
+
+    Where the table was the only block its parent had, or the last block of a
+    cell, an empty paragraph takes its place — that is the minimum the container
+    requires, not a repair of the table.
+    """
+    changed = 0
+    for table in [
+        element for element in root.iter(TBL_TAG)
+        if not any(child.tag == f"{W}tr" for child in element)
+    ]:
+        parent = table.getparent()
+        if parent is None:
+            continue
+        position = list(parent).index(table)
+        parent.remove(table)
+        changed += 1
+
+        if parent.tag not in BLOCK_CONTAINERS:
+            continue
+        remaining = block_children(parent)
+        if not remaining:
+            parent.insert(position, etree.Element(P_TAG))
+        elif parent.tag == TC_TAG and remaining[-1].tag != P_TAG:
+            parent.append(etree.Element(P_TAG))
     return changed
 
 
