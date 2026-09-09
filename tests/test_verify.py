@@ -11,8 +11,18 @@ from verify import (
     verify_clean,
 )
 
+from processor import DocxProcessor
+
 from tests import docx_builder as db
 from tests.support import DocxTestCase
+
+
+#: Styles the damage cases refer to.  ``ART`` is a preserve style in the
+#: shipped configuration, which is what V03 turns on.
+DAMAGE_STYLES = db.styles(
+    db.style_def("ART", name="ART"),
+    db.style_def("CMT", name="CMT"),
+)
 
 
 class ExtractionTests(DocxTestCase):
@@ -23,7 +33,7 @@ class ExtractionTests(DocxTestCase):
             db.text_para("Body paragraph."),
             db.para(db.run("Before box. "), db.text_box(db.text_para("Inside the box."))),
         ))
-        texts = [p.text for p in extract_paragraphs(path, self.config)]
+        texts = [p.text for p in extract_paragraphs(path, self.make_engine())]
 
         self.assertEqual(texts, ["Body paragraph.", "Before box.", "Inside the box."])
 
@@ -31,7 +41,7 @@ class ExtractionTests(DocxTestCase):
         path = self.build(db.document(
             db.para(db.run("PART 1", inner="<w:tab/>"), db.run("GENERAL")),
         ))
-        texts = [p.text for p in extract_paragraphs(path, self.config)]
+        texts = [p.text for p in extract_paragraphs(path, self.make_engine())]
 
         self.assertEqual(texts, ["PART 1\tGENERAL"])
 
@@ -284,39 +294,250 @@ class LongRedactionPairingTests(DocxTestCase):
 class InjectedDamageTests(DocxTestCase):
     """Damaged outputs built by hand, never by running the cleaner.
 
-    Agreement between a broken verifier and the cleaner that produced its
-    input proves nothing, so these construct both sides independently.
+    Agreement between a broken verifier and the cleaner that produced its input
+    proves nothing, so both sides are constructed independently: each case
+    states a source document and a deliberately wrong output, and asks whether
+    the verifier notices.
+
+    Every case carries an anchor paragraph present on both sides.  Substituting
+    a placeholder for the damaged paragraph would make the case fail on the
+    invented text no matter how the loss was classified — a tripwire that fires
+    for the wrong reason is not a tripwire.
+
+    The plan assigns this set to an independent reviewer, on the grounds that a
+    verifier which agrees with its own author proves nothing.  That separation
+    is nominal here: the same author wrote the contract and these cases.  What
+    survives it is that the damage is specified as an outcome — what a reader
+    would call wrong — rather than as a behaviour of the implementation.
     """
 
-    @unittest.expectedFailure
+    ANCHOR = "Comply with NFPA 13 for sprinkler system installation."
+    REQUIREMENT = "Provide fire pumps with a rated capacity of 1500 gpm at 100 psi."
+
+    def damage(self, before, after, name, styles=True, **engine_overrides):
+        """Build a source and an independently damaged output, and verify."""
+        parts = {"word/styles.xml": DAMAGE_STYLES} if styles else None
+        source = self.build(db.document(*before), parts, name=f"{name}_in.docx")
+        damaged = self.build(db.document(*after), parts, name=f"{name}_out.docx")
+        return verify_clean(
+            source, damaged, engine=self.make_engine(**engine_overrides)
+        )
+
+    def test_v01_one_hidden_run_does_not_authorize_the_paragraph(self):
+        """V01 — a hidden note beside a requirement takes its own text only."""
+        result = self.damage(
+            [db.text_para(self.ANCHOR),
+             db.para(db.run(self.REQUIREMENT + " "),
+                     db.run("Delete before issue.", vanish=True))],
+            [db.text_para(self.ANCHOR)],
+            "v01",
+        )
+
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+        self.assertFalse(result.passed)
+
+    def test_v02_a_low_confidence_phrase_alone_authorizes_nothing(self):
+        """V02 — the low-confidence tier needs the formatting it was written for."""
+        result = self.damage(
+            [db.text_para(self.ANCHOR),
+             db.text_para("Provide pumps and revise as required.")],
+            [db.text_para(self.ANCHOR)],
+            "v02",
+        )
+
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+        self.assertFalse(result.passed)
+
+    def test_v03_a_preserve_style_outranks_a_matching_removal_rule(self):
+        """V03 — protection is a property of the paragraph, not of its text."""
+        result = self.damage(
+            [db.text_para(self.ANCHOR),
+             db.text_para("Retain or delete manufacturers below.", style="ART")],
+            [db.text_para(self.ANCHOR)],
+            "v03",
+        )
+
+        self.assertEqual(len(result.preserve_violations), 1, result.removed)
+        self.assertFalse(result.passed)
+
     def test_v04_an_inline_match_must_not_excuse_an_extra_deleted_word(self):
-        """V04 — EXPECTED TO FAIL until W03 lands.
+        """V04 — closed by W03.
 
-        Deleting ``spare`` alongside ``[Verify quantity]`` is currently
-        accepted: ``_classify_modification`` asks whether the lost fragment
-        *contains* a pattern match, not whether matches *cover* it, so the
-        placeholder vouches for the requirement word beside it.
+        Deleting ``spare`` alongside ``[Verify quantity]`` used to be accepted:
+        ``_classify_modification`` asked whether the lost fragment *contained*
+        a pattern match, not whether authorized intervals *covered* it, so the
+        placeholder vouched for the requirement word beside it.
 
-        W03 replaces that predicate with interval coverage and removes this
-        decorator.  It is carried as an expected failure rather than a red
-        test so the suite stays green through W00-W02 and a genuine
-        regression is still visible; unittest reports an unexpected success
-        if the verdict ever changes, which is what makes this a tripwire in
-        both directions.
+        It was carried under ``unittest.expectedFailure`` from W00 until the
+        coverage predicate landed, and unittest reported the unexpected success
+        that said the decorator could go — which is what made it a tripwire in
+        both directions rather than a permanently red test.
         """
-        source = self.build(db.document(db.text_para(
-            "Provide two [Verify quantity] spare filters per unit."
-        )), name="v04_in.docx")
-        damaged = self.build(db.document(db.text_para(
-            "Provide two filters per unit."
-        )), name="v04_out.docx")
-
-        result = verify_clean(source, damaged, engine=self.make_engine())
+        result = self.damage(
+            [db.text_para("Provide two [Verify quantity] spare filters per unit.")],
+            [db.text_para("Provide two filters per unit.")],
+            "v04",
+        )
 
         self.assertFalse(
             result.passed,
             "losing 'spare' is not something an inline placeholder authorises",
         )
+        self.assertEqual(len(result.unexpected_modifications), 1, result.modified)
+
+    def test_v05_an_identical_hidden_run_does_not_cover_the_visible_one(self):
+        """V05 — the same words twice; the visible occurrence is the one lost.
+
+        Substring membership cannot tell them apart, which is why authority is
+        positional.  The hidden copy authorizes its own interval; the deletion
+        happened somewhere else.
+        """
+        phrase = "Isolation valves are required. "
+        result = self.damage(
+            [db.para(db.run(phrase), db.run(phrase, vanish=True),
+                     db.run("Provide access panels."))],
+            [db.para(db.run(phrase, vanish=True), db.run("Provide access panels."))],
+            "v05",
+        )
+
+        self.assertEqual(len(result.unexpected_modifications), 1, result.modified)
+        self.assertFalse(result.passed)
+
+    def test_v06_a_disabled_detector_grants_no_permission(self):
+        """V06 — turning hidden-text detection off removes its authority too."""
+        result = self.damage(
+            [db.para(db.run(self.REQUIREMENT + " "),
+                     db.run("Delete before issue.", vanish=True))],
+            [db.text_para(self.REQUIREMENT)],
+            "v06",
+            hidden_text={"enabled": False},
+        )
+
+        self.assertEqual(len(result.unexpected_modifications), 1, result.modified)
+        self.assertFalse(result.passed)
+
+    def test_v07_a_protected_paragraph_may_not_lose_a_fragment(self):
+        """V07 — judged on the original paragraph, where the protection is."""
+        result = self.damage(
+            [db.text_para("PART 1 - GENERAL AND SUPPLEMENTARY CONDITIONS")],
+            [db.text_para("PART 1 - GENERAL")],
+            "v07",
+        )
+
+        self.assertEqual(len(result.preserve_violations), 1, result.modified)
+        self.assertFalse(result.passed)
+
+    def test_v08_one_unauthorized_fragment_fails_the_whole_modification(self):
+        """V08 — permitted cuts do not vouch for the one beside them."""
+        result = self.damage(
+            [db.text_para(
+                "Provide [Verify quantity] valves and [Insert model] "
+                "actuators for the standpipe.")],
+            [db.text_para("Provide valves and actuators for the.")],
+            "v08",
+        )
+
+        self.assertEqual(len(result.unexpected_modifications), 1, result.modified)
+        self.assertFalse(result.passed)
+
+    def test_v09_an_entirely_eligible_paragraph_may_go(self):
+        """V09 — the false-alarm guard: a correct clean must still pass.
+
+        Every case above asserts that damage is caught.  This one asserts the
+        other half, which is what stops the contract being satisfied by a
+        verifier that simply distrusts everything.
+        """
+        result = self.damage(
+            [db.text_para(self.ANCHOR),
+             db.text_para("Note to Specifier: delete this paragraph before issue.")],
+            [db.text_para(self.ANCHOR)],
+            "v09",
+        )
+
+        self.assertTrue(result.passed, result.removed)
+        self.assertEqual(len(result.expected_removals), 1)
+
+    def test_v10_a_lost_duplicate_is_detected(self):
+        """V10 — multiplicity counts; two identical requirements are two."""
+        result = self.damage(
+            [db.text_para(self.REQUIREMENT),
+             db.text_para("Intervening requirement."),
+             db.text_para(self.REQUIREMENT)],
+            [db.text_para(self.REQUIREMENT),
+             db.text_para("Intervening requirement.")],
+            "v10",
+        )
+
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+        self.assertFalse(result.passed)
+
+    def test_v11_identical_header_text_does_not_excuse_body_loss(self):
+        """V11 — a surviving copy in another part is not the lost paragraph."""
+        header = {"word/header1.xml": db.header(db.text_para(self.REQUIREMENT)),
+                  "word/styles.xml": DAMAGE_STYLES}
+        source = self.build(
+            db.document(db.text_para(self.REQUIREMENT),
+                        db.text_para("Body requirement two.")),
+            header, name="v11_in.docx")
+        damaged = self.build(
+            db.document(db.text_para("Body requirement two.")),
+            header, name="v11_out.docx")
+
+        result = verify_clean(source, damaged, engine=self.make_engine())
+
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+        self.assertFalse(result.passed)
+
+    def test_a_preserved_heading_in_a_deleted_row_is_not_a_violation(self):
+        """Precedence: an explicit tracked deletion outranks protection.
+
+        The author deleted the row on purpose and the run was asked to accept
+        revisions, so the loss is that instruction working.  Reporting it as a
+        preserve violation would be a false alarm on a correct clean — which is
+        why the plan asks for this case alongside the damage set.
+        """
+        row = db.table_of(db.deleted_row(db.text_para("PART 2 - PRODUCTS")))
+        source = self.build(
+            db.document(db.text_para("Body requirement."), row),
+            name="delrow_in.docx")
+        engine = self.make_engine()
+        processor = DocxProcessor(engine, strip_revisions=True)
+        cleaned = self.temp_dir / "delrow_out.docx"
+        self.assertEqual(processor.process(source, cleaned).errors, [])
+
+        result = verify_clean(
+            source, cleaned, engine=engine, strip_revisions=True)
+
+        self.assertEqual(result.preserve_violations, [], result.removed)
+        self.assertTrue(result.passed, result.removed)
+
+    def test_the_same_deleted_row_is_a_violation_when_revisions_are_kept(self):
+        """Without the option that authorizes it, the authority does not exist."""
+        row = db.table_of(db.deleted_row(db.text_para("PART 2 - PRODUCTS")))
+        source = self.build(
+            db.document(db.text_para("Body requirement."), row),
+            name="keeprow_in.docx")
+        damaged = self.build(
+            db.document(db.text_para("Body requirement."),
+                        db.table_of(db.row(db.text_para(" ")))),
+            name="keeprow_out.docx")
+
+        result = verify_clean(source, damaged, engine=self.make_engine())
+
+        self.assertEqual(len(result.preserve_violations), 1, result.removed)
+        self.assertFalse(result.passed)
+
+    def test_v12_reordering_protected_clauses_is_not_a_deletion(self):
+        """V12 — nothing was removed, and the document is still wrong."""
+        result = self.damage(
+            [db.text_para("PART 1 - GENERAL"), db.text_para("PART 2 - PRODUCTS"),
+             db.text_para("PART 3 - EXECUTION")],
+            [db.text_para("PART 1 - GENERAL"), db.text_para("PART 3 - EXECUTION"),
+             db.text_para("PART 2 - PRODUCTS")],
+            "v12",
+        )
+
+        self.assertFalse(result.passed)
 
 
 class StructuralTests(DocxTestCase):

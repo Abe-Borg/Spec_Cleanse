@@ -280,6 +280,25 @@ def is_layout_break(node: etree._Element) -> bool:
     return (node.get(f"{W}type") or "") in LAYOUT_BREAK_TYPES
 
 
+def layout_break_offsets(scope: etree._Element) -> list[tuple[int, int]]:
+    """Character ranges of the page and column breaks inside ``scope``.
+
+    Offsets are into the same text :func:`element_text` produces, so a span
+    computed against a paragraph's text can be tested against them directly.
+    Both the processor (which refuses to cut across one) and verification
+    (which must not then claim the cut was authorized) read this, so the two
+    cannot disagree about where a break sits.
+    """
+    offsets: list[tuple[int, int]] = []
+    offset = 0
+    for node, text in iter_text_nodes(scope):
+        start = offset
+        offset += len(text)
+        if is_layout_break(node):
+            offsets.append((start, offset))
+    return offsets
+
+
 def strip_text_leaves(elem: etree._Element) -> None:
     """Remove text-carrying leaves from ``elem``, keeping everything else.
 

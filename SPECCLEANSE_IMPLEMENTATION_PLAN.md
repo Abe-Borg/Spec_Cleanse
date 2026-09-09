@@ -863,26 +863,39 @@ evaluation is available.
 Construct original and damaged `.docx` files independently; do not run the cleaner to produce these
 damaged outputs. Per §6, these belong to the reviewer.
 
-V01–V04 are reproduced defects with recorded current behavior; the rest are specified but not yet
-observed.
+All twelve are now measured. "Before" is the verifier as it stood at the end of W02, on the fixtures
+in `tests/test_verify.py`; "after" is the source-evidence contract. Seven of the twelve fail against
+the previous verifier and pass now; five were already correct and are carried as regression guards.
 
-| Test | Source and damage | Current behavior | Required result |
-|---|---|---|---|
-| V01 | Ordinary requirement plus a hidden note run; remove the complete paragraph | **PASS**, `formatting_based / hidden text` | Unexpected removal; not PASS |
-| V02 | Plain `Provide pumps and revise as required.`; remove it | **PASS**, `editorial_artifact` | Unexpected removal; not PASS |
-| V03 | `ART`-styled `Select one of the listed manufacturers.`; remove it | **PASS**, `editorial_artifact` | Preserve violation |
-| V04 | `Provide two [Verify quantity] spare filters per unit.` becomes `Provide two filters per unit.` | **PASS**, `inline_placeholder` | Unexpected loss of `spare`; not PASS |
-| V05 | Same phrase occurs in a visible run and hidden run; delete the visible occurrence | not measured | Unexpected loss unless the actual surviving sequence is provably equivalent with all protected text retained |
-| V06 | Hidden detector disabled; delete hidden-marked text | not measured | No hidden-text permission to excuse it |
-| V07 | Protected heading loses a fragment that does not itself match a preserve regex | not measured | Preserve violation based on the original paragraph |
-| V08 | Several permitted fragments plus one unpermitted fragment disappear | not measured | Whole modification verdict fails |
-| V09 | Paragraph with all substantive text in eligible runs disappears | not measured | Expected, provided no preserve or structural rule forbids the loss |
-| V10 | Input has duplicate requirements; output has one fewer | not measured | Missing multiplicity must be detected |
-| V11 | Body requirement disappears but identical header text remains | not measured | Header text must not excuse body loss |
-| V12 | Insert, substitution, or reordered protected clauses | not measured | Not accepted as an expected deletion |
+| Test | Source and damage | Before | After | Required result |
+|---|---|---|---|---|
+| V01 | Ordinary requirement plus a hidden note run; remove the complete paragraph | **PASS**, `formatting_based / hidden text` | fails, unexplained | Unexpected removal; not PASS |
+| V02 | Plain `Provide pumps and revise as required.`; remove it | **PASS**, `editorial_artifact` | fails, unexplained | Unexpected removal; not PASS |
+| V03 | `ART`-styled paragraph matching a removal rule; remove it | **PASS**, `editorial_artifact` | fails, `preserve_violation` | Preserve violation |
+| V04 | `Provide two [Verify quantity] spare filters per unit.` becomes `Provide two filters per unit.` | **PASS**, `inline_placeholder` | fails, unexplained | Unexpected loss of `spare`; not PASS |
+| V05 | Same phrase occurs in a visible run and hidden run; delete the visible occurrence | **PASS**, `formatting_based` | fails, unexplained | Unexpected loss unless the actual surviving sequence is provably equivalent with all protected text retained |
+| V06 | Hidden detector disabled; delete hidden-marked text | **PASS**, `formatting_based` | fails, unexplained | No hidden-text permission to excuse it |
+| V07 | Protected heading loses a fragment that does not itself match a preserve regex | fails, unexplained | fails, `preserve_violation` | Preserve violation based on the original paragraph |
+| V08 | Several permitted fragments plus one unpermitted fragment disappear | fails, unexplained | unchanged | Whole modification verdict fails |
+| V09 | Paragraph with all substantive text in eligible runs disappears | PASS | unchanged | Expected, provided no preserve or structural rule forbids the loss |
+| V10 | Input has duplicate requirements; output has one fewer | fails, unexplained | unchanged | Missing multiplicity must be detected |
+| V11 | Body requirement disappears but identical header text remains | fails, unexplained | unchanged | Header text must not excuse body loss |
+| V12 | Reordered protected clauses | fails | unchanged | Not accepted as an expected deletion |
 
-V04 lands early, in W00, under `unittest.expectedFailure` so the suite stays green until W03 removes
-the decorator along with the defect (§5.2 and §7.4).
+Two corrections to the V01–V04 rows as first written, found while building the fixtures. V03's original
+text — `Select one of the listed manufacturers.` — stopped matching any removal rule once W02 narrowed
+`select one`, which would have made the case prove nothing about preserve *precedence*; it needs text
+that still matches a rule, so the fixture uses `Retain or delete manufacturers below.` And every case
+needs an anchor paragraph present on both sides: substituting a placeholder for the damaged paragraph
+makes the case fail on the invented text no matter how the loss is classified, and a tripwire that
+fires for the wrong reason is not a tripwire.
+
+V05 and V06 were "not yet observed" and turned out to be live defects, not hypotheticals. V08, V10,
+V11 and V12 were already handled correctly.
+
+V04 landed early, in W00, under `unittest.expectedFailure` so the suite stayed green until W03 removed
+the decorator along with the defect (§5.2 and §7.4). It reported the unexpected success that said the
+decorator could go.
 
 For ambiguous identical text, do not claim source occurrence identity that the output format cannot
 establish. The safety assertion is preservation of required text, multiplicity, order, and available
@@ -926,6 +939,25 @@ ambiguous alignment in real use — which would be the signal to revisit this pa
 **Exit gate:** F03–F06 fail for the right reason under deliberately damaged outputs; ordinary supported
 cleans still pass; the criteria above are met and recorded; the contract is documented clearly enough
 for the XML and performance work to use.
+
+**What W03 could and could not establish, as delivered.** The first half of the gate is met and
+recorded: F03–F06 each fail for their stated reason under hand-built damaged outputs, the twelve cases
+are measured before and after in §10.5, and every existing test still passes — including
+`tests/test_evidence.py`, which cleans each case for real and checks the source evidence predicted the
+output.
+
+The five acceptance criteria above **cannot be evaluated**, and were not. Every one of them takes its
+denominator from an acceptance set of independently judged correct outputs on real documents, and no
+specification corpus was available in this workspace — the same gap §8.4 and the W02 formatting-only
+decision already record. What exists instead is the property those criteria were chosen to protect,
+asserted on synthetic documents: V09 requires that a *correct* clean still passes, which is what stops
+the contract being satisfied by a verifier that distrusts everything, and the whole pre-existing suite
+is a standing false-alarm check, since every one of its cleans must still verify.
+
+That is weaker than the criteria ask for and should not be described as meeting them. Criteria 1, 2, 3
+and 5 stay open until this runs against real files; criterion 4 is met. The measurement is the same
+one W01 built the harness for, and the honest reading is that W03's *classification* is evidenced
+while its *false-alarm rate on real documents* is not.
 
 ## 11. W04: pairing, part identity, and ordering
 

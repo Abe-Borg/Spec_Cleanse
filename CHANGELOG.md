@@ -9,6 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Verification now judges against source evidence rather than a flattened list
+  of patterns.** It asks what the configured policy permits losing from the
+  *input* document, then checks the actual output against that; it never asks the
+  cleaner what it did. `DetectionEngine.paragraph_evidence()` produces that
+  evidence — a preserve reason, whole-paragraph authority, placeholder intervals,
+  and per-run authority with offsets into the paragraph text — and
+  `removal_patterns()`, `inline_patterns()` and `preserve_patterns()` are gone
+  with the flattening they existed for.
+
+  The thing the flattened list could not carry is **scope**, and five wrong
+  verdicts followed from that. Each is now pinned by a test that builds the
+  damaged output by hand rather than by running the cleaner:
+
+  - A hidden note run beside a requirement no longer excuses losing the whole
+    paragraph. It authorizes losing its own text. Whole-paragraph loss needs a
+    rule that qualified against the paragraph, or permitted intervals covering
+    every substantive character in it.
+  - The low-confidence tier carries the formatting it requires. `Provide pumps
+    and revise as required.` is text the cleaner leaves alone, and deleting it
+    is now reported instead of accepted.
+  - Preserve **styles** are honoured, not only preserve patterns. A paragraph
+    styled `ART` is protected even when its text matches a removal rule.
+  - A protected paragraph that loses a fragment is a preserve violation, judged
+    on the original paragraph — previously it was merely unexplained.
+  - A lost fragment must be *covered by* a permitted interval, not merely
+    contain something that matches one. `[Verify quantity]` no longer vouches
+    for the word `spare` beside it, and the check is positional, so an editorial
+    run cannot account for an identical requirement elsewhere in the paragraph.
+
+- An accepted tracked deletion now outranks a preserve rule. A protected
+  heading inside a row the author explicitly deleted was reported as a preserve
+  violation; with `strip_revisions` on, that deletion is the instruction the run
+  was asked to carry out, so it is an accepted tracked deletion instead. The
+  extent is validated — the marker must be on the enclosing row or cell — so a
+  revision somewhere nearby is not blanket permission, and with the option off
+  the authority does not exist at all.
+
+- Disabling a detector now removes its permission as well as its removals.
+  Turning hidden-text detection off means hidden formatting no longer excuses a
+  loss in the output.
+
+- Verification reports the detector's own category for a removal — `hidden_text`
+  where hidden text explains it — rather than folding everything formatting into
+  `formatting_based`. That label is now reserved for what it says: a removal that
+  crossed the threshold on formatting alone.
+
+
 - Rules that were deleting real requirement text have been narrowed. The
   copyright section now fires only on unambiguous markers — ©, "copyright",
   "all rights reserved", the ARCOM distribution line, and an anchored "licensed
@@ -47,6 +94,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it in one command and set the switch accordingly.
 
 ### Added
+
+- `docx_xml.layout_break_offsets()`, shared by the processor (which refuses to
+  cut a placeholder across a page or column break) and by verification (which
+  must not then claim the cut was permitted). The processor's private copy is
+  gone.
+- `tests/test_evidence.py` — cleans each case for real and checks that the source
+  evidence predicted the output, so the evidence and the cleaner cannot drift
+  apart unnoticed.
+- The full V01–V12 injected-damage set in `tests/test_verify.py`. Seven of the
+  twelve fail against the previous verifier and pass now; the other five were
+  already correct and are carried as regression guards. V09 asserts that a
+  *correct* clean still passes — without it the contract could be satisfied by a
+  verifier that distrusts everything.
+
 
 - `detection.config_notices()`, reported in the GUI log at startup. `patterns.yaml`
   beside the executable or under `%APPDATA%` is never overwritten by an update, so
@@ -91,6 +152,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rules wrongly remove are carried as expected failures until the rules are
   narrowed; five unambiguous editorial positives are pinned so that narrowing
   cannot go too far.
+- `batch.py`, holding destination planning, the collision rules and `FileOutcome`.
+  It is free of Tk on purpose: `gui.py` imports `tkinter` at module level, so
+  anything defined there cannot be tested where Tk is absent — every Linux run.
+- `ProcessingResult.warnings`, for things worth reporting that did not stop the
+  run, such as a page break kept inside otherwise removed text. Separate from
+  `errors`, which decide `success`.
+- `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
 
 ### Fixed
 
@@ -133,33 +201,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every authorized placeholder is cut, and an exact match settles the pairing
   before similarity is consulted.
 
-### Added
-
-- `batch.py`, holding destination planning, the collision rules and `FileOutcome`.
-  It is free of Tk on purpose: `gui.py` imports `tkinter` at module level, so
-  anything defined there cannot be tested where Tk is absent — every Linux run.
-- `ProcessingResult.warnings`, for things worth reporting that did not stop the
-  run, such as a page break kept inside otherwise removed text. Separate from
-  `errors`, which decide `success`.
-- `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
-
 ### Known
 
 - No real specification corpus was available when the census tools were built,
   so they have not yet been pointed at one. Any decision taken about the
   formatting-only default or the scope of reference protection must record
   whether it had census data or was a judgement call without it.
-- Suite baseline at the time of writing: 190 passed, 7 skipped, 6 expected
-  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the seven GUI
-  skips run, so the counts there are 190 passed, 0 skipped, 6 expected
-  failures. An expected failure is not a failure and an unexpected success is;
-  they are tracked separately for that reason.
-- An inline placeholder still excuses deleting a requirement word beside it:
-  `Provide two [Verify quantity] spare filters per unit.` reduced to
-  `Provide two filters per unit.` verifies as expected, because classification
-  asks whether a lost fragment *contains* a pattern match rather than whether
-  matches *cover* it. The case is pinned by an `unittest.expectedFailure` test, so
-  the suite turns red when the behaviour changes.
+- Suite baseline at the time of writing: 245 passed, 9 skipped, 0 expected
+  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the nine GUI
+  skips run, so the counts there are 245 passed and 0 skipped. Every case that
+  was carried under `unittest.expectedFailure` has since been closed by the
+  package its docstring named. An expected failure is not a failure and an
+  unexpected success is; they are tracked separately for that reason.
 
 ## [1.1.0] - 2026-09-08
 

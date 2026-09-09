@@ -237,15 +237,33 @@ placeholders that need redacting live.
 
 After cleaning, SpecCleanse compares the input and output and reports:
 
-- **Removed paragraphs** — classified as expected (matched a rule, an editorial
-  formatting signal, or an accepted tracked deletion), unexpected (nothing accounts
-  for the loss), or a preserve violation (content that should never be removed).
-  An inline placeholder inside a paragraph never explains losing the whole
-  paragraph; only a paragraph that is nothing but placeholders does.
+- **Removed paragraphs** — classified as expected (a rule qualified against the
+  whole paragraph, the permitted intervals accounted for every substantive
+  character in it, or a tracked deletion was accepted), unexpected (nothing
+  accounts for the loss), or a preserve violation (content that should never be
+  removed, by pattern *or* by style).
+
+  One editorial signal *inside* a paragraph is not permission to lose the
+  paragraph. A hidden note run beside a requirement authorizes losing its own
+  text and nothing beside it; an inline placeholder authorizes cutting the
+  placeholder. Either explains a whole-paragraph loss only when what it
+  authorizes covers everything the paragraph said.
 - **Modified paragraphs** — a paragraph that survived but lost text, with each lost
-  fragment classified the same way. Inline redactions land here. A change that is
+  interval classified the same way. Inline redactions land here. A change that is
   not a pure deletion is never expected: if the text was altered rather than
   trimmed, it is reported.
+
+  Each lost interval has to be *covered by* a permitted one, not merely to
+  contain something that matches a rule. `[Verify quantity]` sitting next to
+  `spare` permits cutting the placeholder and says nothing about the word beside
+  it. The check is positional for the same reason: a paragraph can hold the same
+  words twice, once in an editorial run and once in a requirement, and asking
+  whether a lost fragment *resembles* something removable cannot tell which
+  occurrence actually went.
+
+  A protected paragraph is not touched by the cleaner at all — not redacted, not
+  trimmed — so any loss inside one is a violation whatever the lost text looks
+  like, judged on the original paragraph where the protection is visible.
 
   To decide which output paragraph an input paragraph became, verification first
   computes — from the source text and the configured patterns, independently of
@@ -272,11 +290,20 @@ configured rule, and the structural checks found nothing the input did not alrea
 have. It is not a statement that the document is correct, and not a claim that Word
 will open it without complaint.
 
-Verification borrows the detection engine's compiled patterns rather than
-recompiling its own copy, so the two can never drift apart. That makes the pattern
-layer a consistency check rather than an independent one — a rule that removes the
-wrong thing will be reported as expected. The independent checks are the formatting
-signals read from the source document and the structural inspection.
+Verification asks what the configured policy permits losing from the **source**
+document, and then checks the actual output against that. It never asks the cleaner
+what it did: a program's account of its own work cannot be the evidence that the
+work was right, since a bug would report itself as intended.
+
+It does share the detection engine's compiled rules, which is deliberate — the two
+must not drift into disagreeing about what the configuration says. The limit that
+follows is worth stating plainly: **a rule that removes the wrong thing is still
+reported as expected.** Verification checks that the cleaner did what the rules ask,
+not that the rules ask for the right thing. Whether a rule is correct is a question
+for the patterns themselves, and for the fixtures that pin them.
+
+Disabling a detector removes its permission too, not just its removals: turning
+hidden-text detection off means hidden formatting no longer excuses a loss.
 
 ## Testing
 
@@ -291,6 +318,16 @@ The GUI tests skip themselves where `tkinter` is unavailable, which is true of a
 minimal Linux install though not of the CI runners. The rules that decide whether a
 batch is safe to write live in `batch.py` rather than `gui.py` for that reason, so
 they are exercised wherever the suite runs at all.
+
+Two suites carry the verification contract, and they ask opposite questions.
+`tests/test_evidence.py` cleans each case for real and checks that what the source
+evidence predicted is what the output shows — if the evidence and the cleaner ever
+disagree, verification has quietly become a second opinion about a different
+program. `tests/test_verify.py` builds damaged outputs **by hand, never by running
+the cleaner**, because agreement between a broken verifier and the cleaner that
+produced its input proves nothing. One of those cases asserts that a *correct* clean
+still passes, which is what stops the whole contract being satisfied by a verifier
+that simply distrusts everything.
 
 Continuous integration runs the suite on every pull request and every push to
 `master`, in two lanes: Windows on the Python version the executable is built with,
