@@ -1434,11 +1434,13 @@ the verdict from the categories is equivalent today and would fail silently the 
 contributes to `passed` without a matching category: a real failure reported as Verified. A subTest
 over all seven contributors asserts the two agree, and it fires when the numbering branch is removed.
 
-**What this does not establish.** The exit gate's last clause — "the package's tests have actually
-executed on Windows" — is not met from this workspace. The thirteen GUI tests skip where `tkinter` is
+**The exit gate's last clause is met, and by CI rather than by this workspace.** It asks that "the
+package's tests have actually executed on Windows". The thirteen GUI tests skip where `tkinter` is
 absent, and skipped GUI tests establish nothing about Windows GUI behaviour, which is the gate's own
-point. They were exercised under a stubbed `tkinter`, which proves the workers run and their logic is
-right, not that the window behaves. CI's Windows lanes execute them; that is the evidence to read.
+point; under a stubbed `tkinter` they prove the workers run and their logic is right, not that the
+window behaves. The Windows lane settles it — `Ran 361 tests ... OK`, **with no skip count at all**, so
+every GUI test executed against a real Tk. Read that line rather than the Linux one, which reports
+`OK (skipped=13)` for the same commit.
 
 Recorded because it caught four real regressions: the plain Linux run reported `Ran 349 tests ... OK
 (skipped=9)` while four GUI tests were already broken by this package's own change. Only the stubbed
