@@ -1042,6 +1042,47 @@ rather than pooled with it, is part of this package and not of W03.
 **Exit gate:** supported long redactions pass without weakening injected-damage tests or changing the
 verdict for real additions and substitutions; part and story identity is carried through comparison.
 
+### 11.4 What W04 found, and the one thing it did not build
+
+Four defects, each measured against a real clean before anything was changed, and each now pinned in
+`tests/test_identity.py`:
+
+| | Defect | Kind |
+|---|---|---|
+| 1 | A requirement deleted from the body verified clean, because an identical *hidden* paragraph in a header carried authority the body's copy did not | **false negative** |
+| 2 | Removing a hidden note beside an identical plain requirement was blamed on the plain one | false alarm |
+| 3 | Two paragraphs with character-identical runs differing only by an editorial *paragraph style*: removing the styled one was blamed on the plain one | false alarm |
+| 4 | A paragraph carrying both an authorized run and a placeholder had no expectation to match, so the differ chose, and blamed the wrong copy of a repeated run | false alarm (3 shapes) |
+
+Defect 1 is invariant 6 and the reason §11.2 exists. The other three are the same mistake seen from
+different sides: **a text match is not an identity**. Comparison now happens inside a location, and
+within one, which occurrence disappeared is decided by paragraph signature — style and runs — rather
+than by `difflib`'s alignment.
+
+The ten §11.3 redaction shapes (repeated words, split runs, multiple and adjacent placeholders,
+leading and trailing whitespace, a long redaction leaving a short survivor) were measured and all
+already passed, so §11.1 needed no separate work beyond defect 4's generalisation.
+
+**The ambiguous-alignment category was not built, and that is a deliberate finding rather than an
+omission.** §11.2 assigns it to W04, on the reasoning that a region the verifier cannot resolve should
+be counted apart from genuine damage. After the structural resolution above, no such region could be
+constructed: every ambiguous case built for this package is now *determined* by the run and paragraph
+signatures.
+
+The attempt is worth recording because it nearly went wrong. The natural heuristic — treat a loss as
+ambiguous when the lost text occurs more than once and some occurrence is authorized — would have
+relabelled **V05** as ambiguous. V05 is not ambiguous: the profile mismatch positively establishes that
+the *hidden* copy survived and the visible requirement was lost. It is determined damage, and a
+category that softened it would have weakened an injected-damage test to add a number.
+
+So the category stays unbuilt until a case demands it. The two places it would be reachable are known
+and recorded here: a paragraph whose run offsets fail to reconstruct its text (`offsets_reliable`
+false, a defensive guard with no reachable trigger today), and a partially-cleaned output where the
+cleaner removed only some authorized runs — which the cleaner does not produce, so it arises only from
+an output that is already damaged and correctly reported as such. If corpus evaluation later shows
+Needs-review dominated by alignment rather than by findings, this is the answer, and §10.6 criterion 3
+still asks for the measurement.
+
 ## 12. W05: inline XML redaction and field carriers
 
 W00 closed the reproduced separator case. W05 closes the rest of the inline-redaction surface and the

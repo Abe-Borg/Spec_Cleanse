@@ -38,9 +38,10 @@ from docx_xml import (
     block_children,
     collect_content_parts,
     field_chars_balanced,
-    cut_spans,
     iter_paragraphs,
+    note_identity,
     paragraph_signature,
+    run_profile,
     load_config,
     load_styles,
     orphaned_range_markers,
@@ -89,10 +90,29 @@ class ParagraphInfo:
     #: Signatures of this paragraph's text-carrying runs, as document fact.
     #: Read from both sides, so the output can be compared run-for-run when
     #: its extracted text is identical to more than one source arrangement.
+    run_profile: tuple = ()
+    #: The paragraph's full identity — its style as well as its runs.  Used to
+    #: decide *which* of several identical texts actually disappeared, where the
+    #: style is authority the runs do not carry.
     signature: tuple = ()
+    #: Package-relative part name, e.g. ``word/document.xml``.  Full, so that
+    #: ``word/document.xml`` and ``word/glossary/document.xml`` stay distinct.
+    part: str = ""
+    #: Footnote or endnote identity within a shared part, or None in body text.
+    story: str | None = None
     #: True if a tracked change marks this paragraph's container as deleted —
     #: a deleted table row keeps its text in plain w:t, so nothing else shows it.
     in_tracked_deletion: bool = False
+
+    @property
+    def location(self) -> tuple[str, str | None]:
+        """What this paragraph is compared *within*.
+
+        Comparison happens inside a location, never across them.  A header and
+        the body are different documents as far as content identity goes, and an
+        identical heading in one cannot account for the other's loss.
+        """
+        return (self.part, self.story)
 
     @property
     def text(self) -> str:
@@ -118,18 +138,31 @@ class ParagraphInfo:
         """
         return self.evidence.reason_for_span(start + self.lead, end + self.lead)
 
-    def expected_after_redaction(self) -> str | None:
-        """What this paragraph becomes when every authorized placeholder is cut.
+    def expected_after_removal(self) -> str | None:
+        """What this paragraph becomes under the whole intended removal.
 
-        ``None`` when no placeholder is authorized, so there is no permitted
-        transformation to expect.  The intervals come from evaluating the
-        configured patterns against this source paragraph — never from anything
-        the processor reports about what it did.
+        Every authorized interval, not only the placeholders: a paragraph can
+        carry both a run policy permits losing and a placeholder inside another
+        run, and expecting only one of the two leaves the differ to guess.  The
+        intervals come from evaluating the configured patterns against this
+        source paragraph — never from anything the processor reports.
         """
-        spans = list(self.evidence.inline_spans)
-        if not spans:
-            return None
-        return cut_spans(self.raw_text, spans).strip()
+        return self.evidence.expected_text()
+
+    def authorized_intervals(self) -> list[tuple[int, int]]:
+        """The authorized intervals in ``text`` coordinates, not raw ones.
+
+        Used where the output *is* the expected text: the intervals are then
+        known outright, and deriving them by diffing would reintroduce exactly
+        the guess this path exists to avoid.
+        """
+        limit = len(self.text)
+        intervals = []
+        for start, end in self.evidence.authorized_spans():
+            lo, hi = max(0, start - self.lead), min(limit, end - self.lead)
+            if lo < hi:
+                intervals.append((lo, hi))
+        return intervals
 
 
 @dataclass
@@ -281,6 +314,7 @@ def extract_paragraphs(
             engine.bind_styles(load_styles(temp_dir / "word"))
         paragraphs: list[ParagraphInfo] = []
         for xml_path in collect_content_parts(temp_dir / "word"):
+            part = xml_path.relative_to(temp_dir).as_posix()
             root = parse_xml(xml_path).getroot()
             for para in iter_paragraphs(root, skip_alternate_fallback=True):
                 raw_text = paragraph_text(para)
@@ -292,7 +326,10 @@ def extract_paragraphs(
                         engine.paragraph_evidence(para) if evidence
                         else ParagraphEvidence(raw_text=raw_text)
                     ),
+                    run_profile=run_profile(para),
                     signature=paragraph_signature(para),
+                    part=part,
+                    story=note_identity(para),
                     in_tracked_deletion=_in_tracked_deletion(para),
                 ))
         return paragraphs
@@ -470,6 +507,53 @@ def verify_clean(
         structural=_compare_structure(input_path, output_path),
     )
 
+    for location in _locations(input_paras, output_paras):
+        _compare_location(
+            [p for p in input_paras if p.location == location],
+            [p for p in output_paras if p.location == location],
+            result,
+            strip_revisions,
+        )
+
+    return result
+
+
+def _locations(
+    input_paras: list[ParagraphInfo], output_paras: list[ParagraphInfo]
+) -> list[tuple[str, str | None]]:
+    """Every location either side holds, in input order then output-only order.
+
+    A location is a package part plus, inside a part that holds several
+    independent stories, the note it belongs to.  Comparison never crosses one:
+    ``footnotes.xml`` is a single part containing many notes, and an identical
+    paragraph in another note is not evidence about this one.
+    """
+    ordered = list(dict.fromkeys(p.location for p in input_paras))
+    ordered += [
+        location for location in dict.fromkeys(p.location for p in output_paras)
+        if location not in set(ordered)
+    ]
+    return ordered
+
+
+def _compare_location(
+    input_paras: list[ParagraphInfo],
+    output_paras: list[ParagraphInfo],
+    result: VerificationResult,
+    strip_revisions: bool,
+) -> None:
+    """Classify every difference within one location.
+
+    A location missing from the output leaves ``output_paras`` empty, so all of
+    its paragraphs are removals — and a location the output invented has no
+    input side, so all of its paragraphs are additions.  Both fall out of the
+    ordinary comparison rather than needing a case of their own.
+    """
+    input_texts = [p.text for p in input_paras]
+    output_texts = [p.text for p in output_paras]
+    lost = _lost_signatures(input_paras, output_paras)
+    attributed: set[int] = set()
+
     matcher = difflib.SequenceMatcher(None, input_texts, output_texts, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
@@ -481,9 +565,10 @@ def verify_clean(
         paired: set[int] = set()
         for idx in range(i1, i2):
             info = input_paras[idx]
-            match = _pair_with_survivor(info, output_texts, j1, j2, paired)
+            match = _pair_with_survivor(info, output_paras, j1, j2, paired)
 
             if match is None:
+                info = _attribute_removal(info, input_paras, lost, attributed)
                 result.removed.append(_classify_removal(info, strip_revisions))
                 continue
 
@@ -500,12 +585,71 @@ def verify_clean(
             output_texts[jdx] for jdx in range(j1, j2) if jdx not in paired
         )
 
-    return result
+
+def _lost_signatures(
+    input_paras: list[ParagraphInfo], output_paras: list[ParagraphInfo]
+) -> dict[str, Counter]:
+    """Per text, which paragraph signatures the output no longer has.
+
+    A multiset difference, so two identical paragraphs that both survive are
+    not mistaken for one.  This is what says *which* occurrence of a repeated
+    text actually disappeared — a question the text alone cannot answer.
+    """
+    lost: dict[str, Counter] = {}
+    for text in {p.text for p in input_paras}:
+        missing = (
+            Counter(p.signature for p in input_paras if p.text == text)
+            - Counter(p.signature for p in output_paras if p.text == text)
+        )
+        if missing:
+            lost[text] = missing
+    return lost
+
+
+def _attribute_removal(
+    info: ParagraphInfo,
+    candidates: list[ParagraphInfo],
+    lost: dict[str, Counter],
+    attributed: set[int],
+) -> ParagraphInfo:
+    """Decide which source paragraph actually went, when several could have.
+
+    Where a location holds the same text more than once, the differ's choice of
+    which occurrence to call deleted is arbitrary: it aligns on the longest
+    matching block, not on evidence.  So a document holding a plain requirement
+    and an identical hidden note had a *correct* clean reported as damage — the
+    note was removed, and the plain copy was blamed.
+
+    The signatures say which paragraph is genuinely absent from the output, so
+    the verdict is taken against that one.  This only ever re-attributes among
+    paragraphs whose text is already identical, and only to a signature the
+    output really is missing; where the text occurs once there is nothing to
+    choose and ``info`` is returned unchanged.
+    """
+    remaining = lost.get(info.text)
+    if remaining is None:
+        return info
+
+    same_text = [
+        (index, para) for index, para in enumerate(candidates)
+        if para.text == info.text
+    ]
+    if len(same_text) < 2:
+        return info
+
+    for index, para in same_text:
+        if index in attributed:
+            continue
+        if remaining.get(para.signature, 0) > 0:
+            remaining[para.signature] -= 1
+            attributed.add(index)
+            return para
+    return info
 
 
 def _pair_with_survivor(
     info: ParagraphInfo,
-    output_texts: list[str],
+    output_paras: list[ParagraphInfo],
     j1: int,
     j2: int,
     paired: set[int],
@@ -528,22 +672,30 @@ def _pair_with_survivor(
 
     Returns the survivor's index and the intervals of ``info.text`` it lost.
     """
-    expected = info.expected_after_redaction()
+    expected = info.expected_after_removal()
 
     for jdx in range(j1, j2):
         if jdx in paired:
             continue
-        after = output_texts[jdx]
+        after = output_paras[jdx].text
         if after == info.text:
             return jdx, []
         if expected is not None and after == expected:
+            # Matching text is not on its own evidence that the *right* text
+            # went: a paragraph holding a visible requirement and an identical
+            # hidden copy produces this same string whichever one was lost.  So
+            # the runs have to agree as well before the intervals are taken as
+            # known; otherwise the ordinary reasoning below decides, and the
+            # loss of the visible copy is still reported.
+            if output_paras[jdx].run_profile == info.evidence.expected_profile():
+                return jdx, _substantive(info.text, info.authorized_intervals())
             intervals = _removed_intervals(info.text, after) or []
             return jdx, _substantive(info.text, intervals)
 
     for jdx in range(j1, j2):
         if jdx in paired:
             continue
-        after = output_texts[jdx]
+        after = output_paras[jdx].text
 
         intervals = _removed_intervals(info.text, after)
         if intervals is None:
@@ -642,8 +794,8 @@ def _classify_modification(
             info.text, after, fragments, PRESERVE_VIOLATION, info.preserve_reason
         )
 
-    expected = info.evidence.surviving_signature()
-    if expected and survivor.signature == expected:
+    expected = info.evidence.expected_profile()
+    if expected and survivor.run_profile == expected:
         authorized = info.evidence.authorities()
         if authorized:
             category, pattern = _verdict(authorized)

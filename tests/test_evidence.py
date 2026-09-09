@@ -21,6 +21,7 @@ from detection import ParagraphEvidence, RunEvidence, WHITESPACE_ONLY
 from docx_xml import (
     iter_paragraphs,
     paragraph_signature,
+    run_profile,
     load_styles,
     paragraph_text,
     parse_xml,
@@ -220,11 +221,14 @@ class SpanAuthorityShape(unittest.TestCase):
 class RunSignatures(EvidenceCase):
     """Signatures say whether two runs are interchangeable, nothing more."""
 
-    def _signatures(self, xml):
+    def _paragraph(self, xml, name="sig"):
         src = self.build(db.document(xml), {"word/styles.xml": STYLES},
-                         name=f"sig{abs(hash(xml))}.docx")
+                         name=f"{name}{abs(hash(xml))}.docx")
         _, paragraphs = self._paragraphs(src)
-        return paragraph_signature(paragraphs[0])
+        return paragraphs[0]
+
+    def _signatures(self, xml):
+        return run_profile(self._paragraph(xml))
 
     def test_identical_text_with_different_formatting_is_distinguishable(self):
         """The whole point: same characters, different run, different signature."""
@@ -256,6 +260,23 @@ class RunSignatures(EvidenceCase):
             db.para(db.run("Real text."), db.run(""), db.run("   ")))
 
         self.assertEqual(len(signatures), 1)
+
+    def test_a_paragraph_signature_carries_the_style_the_runs_do_not(self):
+        """Identical runs, different authority — the style has to be in the identity.
+
+        An editorial *paragraph* style permits losing the paragraph while its
+        runs say nothing at all.  Without the style here, removing the styled
+        copy of a repeated text was blamed on the plain one, and a correct clean
+        was reported as damage.
+        """
+        text = "Coordinate hangers with the structural drawings."
+        plain = paragraph_signature(self._paragraph(db.text_para(text), "plain"))
+        styled = paragraph_signature(
+            self._paragraph(db.text_para(text, style="CMT"), "styled"))
+
+        self.assertEqual(plain[1], styled[1], "the runs really are identical")
+        self.assertNotEqual(plain, styled, "the style must separate them")
+        self.assertEqual(styled[0], "CMT")
 
 
 class OffsetIntegrity(EvidenceCase):

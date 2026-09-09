@@ -46,6 +46,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   revision somewhere nearby is not blanket permission, and with the option off
   the authority does not exist at all.
 
+- **Verification compares within a location, never across one.** A location is a
+  package-relative part name plus, inside `footnotes.xml`, the individual note.
+  Paragraphs were previously compared as one flat list spanning every part, which
+  made authority transferable between them: a requirement deleted from the body
+  was reported as verified because an identical *hidden* paragraph in a header
+  carried authority the body's copy did not. `word/document.xml` and
+  `word/glossary/document.xml` are now distinct, and one footnote can no longer
+  account for another.
+
+- Which of several identical paragraphs disappeared is decided by evidence rather
+  than by the difference algorithm's alignment. Removing a hidden note beside an
+  identical plain requirement was blamed on the plain one, reporting a correct
+  clean as damage; the multiset of paragraph signatures now says which paragraph
+  the output is genuinely missing. The signature includes the paragraph style,
+  because two paragraphs can hold identical runs and still differ in what policy
+  permits — an editorial paragraph style is authority the runs do not carry.
+
+- The expected transformation is the whole intended removal, not one mechanism at
+  a time. A paragraph carrying both a run policy permits losing and a placeholder
+  inside another run had no expectation to match, so it fell through to the
+  differ, which blamed the wrong copy of a repeated run. Three such correct cleans
+  were reported as damage and now verify. Matching text alone is still never
+  enough: the surviving runs must agree before the intervals are taken as known.
+
 - Repeated identical text no longer makes a correct clean look like damage. A
   hidden note followed by an identical visible requirement extracts the same
   characters twice; removing the note is correct, but the difference algorithm
@@ -105,9 +129,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `docx_xml.run_signature()` and `paragraph_signature()` — a run's identity as
-  document fact: its text plus its raw `w:rPr` properties, no style resolution
-  and no policy. They answer whether two runs are interchangeable.
+- `docx_xml.run_signature()`, `run_profile()` and `paragraph_signature()` — a run's
+  identity as document fact (its text plus its raw `w:rPr` properties, no style
+  resolution and no policy), the profile of a paragraph's text-carrying runs, and
+  the paragraph's full identity including its `w:pStyle`. They answer whether two
+  runs, or two paragraphs, are interchangeable.
+- `docx_xml.note_identity()` and `paragraph_style()`.
 - `docx_xml.layout_break_offsets()`, shared by the processor (which refuses to
   cut a placeholder across a page or column break) and by verification (which
   must not then claim the cut was permitted). The processor's private copy is

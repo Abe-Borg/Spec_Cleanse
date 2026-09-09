@@ -271,6 +271,19 @@ After cleaning, SpecCleanse compares the input and output and reports:
   runs unchanged, so keeping the hidden copy while the visible requirement
   disappears is still reported.
 
+**Comparison happens inside a location.** A location is a part of the package —
+the document, a header, the glossary — plus, within `footnotes.xml`, the
+individual note. Nothing is ever compared across one. Text equality is not
+identity: a requirement deleted from the body must not be excused by an
+identical paragraph in a header, and one footnote cannot account for another.
+
+Where a location holds the same text more than once, which copy disappeared is
+decided by comparing paragraph signatures — the style and the runs — rather than
+by the difference algorithm's choice of alignment. That matters in both
+directions: a correct clean that removes a hidden note beside an identical plain
+requirement must pass, and an output that keeps the *hidden* copy while the
+plain requirement disappears must not.
+
   A protected paragraph is not touched by the cleaner at all — not redacted, not
   trimmed — so any loss inside one is a violation whatever the lost text looks
   like, judged on the original paragraph where the protection is visible.
