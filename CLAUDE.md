@@ -28,6 +28,7 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
 | `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
+| `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
 | `legacy/deep_cleaner.py` | Archived; not used |
 | `legacy/style_cleaner.py` | Archived; not used |
 
@@ -330,7 +331,22 @@ Two conventions matter here:
   anything, and hides real regressions. The decorator keeps the suite green while the
   defect stands and turns it red — `unexpected successes=1`, exit code 1 — the moment
   the behaviour changes, so the tripwire fires in both directions and the decorator
-  cannot be forgotten.
+  cannot be forgotten. `tests/test_shipped_policy.py` and the V04 case in
+  `tests/test_verify.py` both use it; each docstring names the package that closes it.
+- **A measurement tool is held to the same standard as the code it measures.**
+  Everything under `tools/` is tested, because a wrong number is what a decision
+  gets taken on. Two traps, both of which produced real bugs here:
+  - **Measure actions, not detections.** `ProcessingResult.detections` is what the
+    detectors *found*; the processor acts once per paragraph. A note matching a
+    specifier rule and a copyright rule is two detections and one removed paragraph,
+    and a paragraph of nothing but a placeholder is an inline detection that gets
+    *removed* whole. `tools/actions.py` mirrors `_process_xml_file`'s decision order
+    and asks the processor's own methods; everything else builds on it rather than
+    walking detections.
+  - **lxml element identity needs a live reference.** Proxies are built on demand and
+    released when nothing holds them, so `id(element)` is stable only while a list of
+    those elements is alive. A position map built across two `root.iter()` passes is
+    wrong — materialise once and hold it.
 
 ### Manual Testing Workflow
 
