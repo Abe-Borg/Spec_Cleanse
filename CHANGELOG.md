@@ -142,8 +142,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed paragraph that took part in automatic numbering makes a run need review
   without claiming anything was lost: nothing went missing, but the numbers a
   reader sees may now read differently. Direct `w:numPr` and numbering inherited
-  through the paragraph style are both recognised, and `w:numId` `"0"` is treated
-  as the override it is rather than a list called zero. A notice is raised only
+  through the paragraph style are both recognised, including the default
+  paragraph style Word applies where none is named, and `w:numId` `"0"` is
+  treated as the override it is rather than a list called zero. A notice is raised only
   when the list still has surviving members, since a list whose every paragraph
   went renumbers nothing. Nothing is renumbered and no cross-reference is
   rewritten.
@@ -231,7 +232,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PAGEREF`, `NOTEREF`), simple or complex, and internal hyperlink anchors are
   now inventoried document-wide and compared. Only references this run broke are
   reported; one already dangling on the way in is the document's own problem, and
-  a bookmark nothing points at may go silently. There is deliberately no
+  a bookmark nothing points at may go silently. Each surviving consumer is named
+  with its part and with the instruction or anchor that points at the target —
+  one missing bookmark can break references in the body, a header and a note at
+  once, and each is a separate place to repair. There is deliberately no
   tracked-deletion exemption: accepting a revision that deletes a referenced
   target is a requested deletion with an unrequested consequence. Nothing is
   repaired — no target is invented, no field retargeted, no replacement bookmark
@@ -241,8 +245,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last row already worked; the `w:tbl` stayed, holding nothing. Word does not
   accept that, and neither the lint nor verification could see it. Where the
   table was its parent's only block, or a cell's last block, an empty paragraph
-  takes its place — the minimum the container requires, not a repair. A zero-row
-  table and a zero-cell row are now both linted, so the shape is observable
+  takes its place — the minimum the container requires, not a repair. Only tables
+  this acceptance actually emptied are removed: one that arrived rowless is the
+  document's own problem, and removing it would rewrite a file that had no
+  revisions to accept. A zero-row table and a zero-cell row are now both linted, so the shape is observable
   rather than silently absent from the rules.
 
 

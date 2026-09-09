@@ -481,11 +481,19 @@ package** — the lint had no rule for the shape, so it reported nothing, which 
 same as reporting that nothing is wrong. Nesting needs no special traversal: a table with
 no rows has no cells, so it can hold no inner table, and is always a leaf.
 
+**Only tables this acceptance actually emptied are removed.** A table that arrived rowless
+is the document's own problem; removing it would rewrite a file that had no revisions to
+accept, merely because the option was on. It is still linted, so it is visible without
+being silently repaired — the same rule the structural comparison follows, that only what
+this run did is this run's doing.
+
 **A removed paragraph that took part in automatic numbering.** Its own category —
 `VerificationResult.numbering` — because no text-integrity claim is being made. Nothing
 was lost; what may have changed is the numbers a reader sees. `docx_xml.numbering_id()`
 resolves direct `w:numPr` then the style chain, and treats `w:numId` `"0"` as the
-override it is rather than a list called zero. A notice is raised only when the list
+override it is rather than a list called zero. A paragraph naming no style still has one —
+Word applies the default paragraph style — so the chain starts there when `w:pStyle` is
+absent, rather than at `None` and examining nothing. A notice is raised only when the list
 still has surviving members: a list whose every paragraph went renumbers nothing, and a
 notice about it would be noise dressed as precision.
 
