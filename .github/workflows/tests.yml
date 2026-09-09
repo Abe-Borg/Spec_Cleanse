@@ -38,11 +38,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Windows is where the product ships, and the only place the GUI
-          # tests actually run: they skip wherever tkinter is absent, which is
-          # every Linux runner. The version matches the one release.yml builds
-          # with, so a green suite here means the shipped executable's
-          # interpreter ran it.
+          # Windows is where the product ships, and the only platform whose
+          # path semantics the code has actually been wrong about: case
+          # folding and filesystem identity in batch.py were broken twice,
+          # both times invisibly from Linux. The version matches the one
+          # release.yml builds with, so a green suite here means the shipped
+          # executable's interpreter ran it.
+          #
+          # It is *not* the only place the GUI tests run — actions/setup-python
+          # ships tkinter on the Linux runners too, so both lanes exercise
+          # them. That was worth finding out rather than assuming: the first
+          # run of this workflow reported no skips on Linux.
           - name: windows (3.12)
             os: windows-latest
             python: "3.12"
@@ -66,7 +72,9 @@ jobs:
       # exits 0 — so a Windows lane without tkinter would look exactly like a
       # passing one while testing none of the GUI. Checked before the suite
       # runs, so the failure names the real reason rather than showing up as an
-      # unexplained drop in the test count.
+      # unexplained drop in the test count. Windows only, because this is the
+      # platform where the GUI tests are required rather than incidental; a
+      # Linux image quietly dropping tkinter should not fail the build.
       - name: The Windows lane must be able to run the GUI tests
         if: matrix.os == 'windows-latest'
         run: python -c "import gui; print('tkinter available; GUI tests will run')"

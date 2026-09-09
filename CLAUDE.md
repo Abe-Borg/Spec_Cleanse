@@ -322,10 +322,13 @@ Add a test whenever you touch removal safety, the pattern tiers, or verification
 
 Two conventions matter here:
 
-- **GUI tests skip wherever `tkinter` is absent**, which is every Linux run. Logic
-  that needs testing must not live in `gui.py`; that is why `batch.py` exists. When
-  changing `gui.py`, say plainly that its tests did not execute rather than reporting
-  a green suite as though they had.
+- **GUI tests skip wherever `tkinter` is absent.** That is a property of the
+  environment, not of the platform: a minimal Linux container has no `tkinter`, but
+  `actions/setup-python` ships one, so both CI lanes run them. Logic that needs
+  testing must still not live in `gui.py` — that is why `batch.py` exists — and when
+  changing `gui.py` in an environment without `tkinter`, say plainly that its tests
+  did not execute rather than reporting a green suite as though they had. Read the
+  skip count; do not infer it from the operating system.
 - **A test that anticipates a later fix is carried under `unittest.expectedFailure`,
   never as an ordinary failing test.** A permanently red suite cannot validate
   anything, and hides real regressions. The decorator keeps the suite green while the

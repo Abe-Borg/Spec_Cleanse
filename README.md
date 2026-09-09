@@ -261,16 +261,17 @@ so it needs nothing beyond the runtime dependencies:
 python -m unittest discover -s tests -t .
 ```
 
-The GUI tests are skipped where `tkinter` is unavailable — every Linux run. The
-rules that decide whether a batch is safe to write live in `batch.py` rather than
-`gui.py` for that reason, so they are exercised everywhere.
+The GUI tests skip themselves where `tkinter` is unavailable, which is true of a
+minimal Linux install though not of the CI runners. The rules that decide whether a
+batch is safe to write live in `batch.py` rather than `gui.py` for that reason, so
+they are exercised wherever the suite runs at all.
 
 Continuous integration runs the suite on every pull request and every push to
 `master`, in two lanes: Windows on the Python version the executable is built with,
-which is the only place the GUI tests actually run, and Linux on 3.10, the oldest
-version this project claims to support. The Windows lane checks that `gui.py`
-imports before running anything, because a skip exits zero and a lane that skipped
-the GUI tests would otherwise look exactly like one that passed them.
+and Linux on 3.10, the oldest version this project claims to support. The Windows
+lane checks that `gui.py` imports before running anything, because a skip exits zero
+and a lane that skipped the GUI tests would otherwise look exactly like one that
+passed them.
 
 Some tests are carried as `unittest.expectedFailure` — cases that describe
 behaviour a later change will fix. The suite stays green while they fail, and turns
