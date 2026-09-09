@@ -124,6 +124,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   More editorial text survives as a result. That is the intended trade: a
   retained note costs noise in whatever reads the cleaned file, a deleted
   requirement is not recoverable from it.
+- **`patterns.yaml` is checked for the mistakes that used to fail silently.** A
+  Boolean option must now be a real Boolean: YAML makes `formatting_only_removal:
+  'false'` a *string*, and every reader asks a plain truthiness question, so
+  writing that the option should be off switched it **on** — the one path that
+  removes text with no content evidence behind it. `enabled: 'false'` had the
+  same shape and left a section running that the user had turned off. Both are
+  refused now, with a message that says why quoting broke it.
+
+  Editorial colours are checked too, and the three ways to get one wrong all
+  went differently: `255` raised an `AttributeError` per file at detection time
+  naming no section, key or line; `'#FF0000'` and `'bright red'` were accepted
+  and matched nothing, forever. A leading `#` is now normalised away — it has one
+  possible meaning and it is how every other tool writes a hex colour — and
+  anything that is not six hexadecimal digits is refused, naming the section,
+  key and index. Style names are deliberately not validated against any one
+  document, since styles differ across templates.
+
 - **Every file that needs review now says why.** The outcome carried one
   undifferentiated verdict, so a file needing a look because a cross-reference
   broke, because the configuration is unusual, or because a requirement went
@@ -255,6 +272,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The verifier resolves `patterns.yaml` the same way the app does.** Asked to
+  verify without an engine, it read the file beside its own module, which in a
+  frozen build is PyInstaller's temporary extraction directory rather than the
+  copy a user can edit — so it would have judged the output against the shipped
+  defaults while the cleaner used the user's rules, and reported the difference
+  as damage. It now goes through `apppaths.resolve_config_path()`. The GUI always
+  supplies an engine, so no shipped run was affected. Precedence is unchanged and
+  now tested: an engine wins outright, an explicit path comes next, and only with
+  neither is the location resolved — lazily, so supplying an engine never seeds a
+  per-user configuration file.
+
 - **One file's failure no longer ends the batch.** `DocxProcessor.process()`
   turns its own exceptions into errors, but anything raised around it reached
   the run's outer handler and stopped it, leaving every remaining file
@@ -371,9 +399,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so they have not yet been pointed at one. Any decision taken about the
   formatting-only default or the scope of reference protection must record
   whether it had census data or was a judgement call without it.
-- Suite baseline at the time of writing: 361 passed, 13 skipped, 0 expected
-  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the thirteen GUI
-  skips run, so the counts there are 361 passed and 0 skipped. Every case that
+- Suite baseline at the time of writing: 388 passed, 15 skipped, 0 expected
+  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the fifteen GUI
+  skips run, so the counts there are 388 passed and 0 skipped. Every case that
   was carried under `unittest.expectedFailure` has since been closed by the
   package its docstring named. An expected failure is not a failure and an
   unexpected success is; they are tracked separately for that reason.

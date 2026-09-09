@@ -111,6 +111,18 @@ set in three places that must agree — the shipped YAML, `PatternConfig` and
 in `verify_clean` — and a test asserts each. Tests that depend on the switch state it
 explicitly rather than leaning on whichever way the default points.
 
+`load_config()` validates the options where a mistake would otherwise fail silently.
+A key in `BOOLEAN_KEYS` must be a real Boolean, because YAML makes `'false'` a
+*string* and every reader asks a plain truthiness question — so a quoted "off"
+turns the option on, and for `formatting_only_removal` that is the one path that
+removes text on no content evidence. Editorial colours must be six hexadecimal
+digits as Word writes them in `w:color w:val`; a leading `#` is normalised away
+rather than rejected, because it has one possible meaning and the alternative was a
+rule that silently matched nothing. `normalise_color()` rewrites them in place, so
+every reader downstream compares one shape. Style names are deliberately *not*
+validated against any document: styles differ across templates, so a name one
+sample does not use says nothing.
+
 `detection.config_notices()` reports what a user's own `patterns.yaml` is doing that
 they cannot otherwise see: a shipped rule still present that was later narrowed for
 deleting requirements, and formatting-only removal being on. `apppaths` prefers an
@@ -765,6 +777,15 @@ Seeding is best-effort — a read-only profile falls back to the bundled copy ra
 than raising, because a traceback from a windowed build goes nowhere anyone can
 see. `gui.py` logs the resolved path at startup and names it in full in
 configuration errors.
+
+`verify_clean()` resolves its configuration through the same function, and only when
+it has to. Precedence: an engine wins outright, an explicit `config_path` comes next,
+and only with neither is the location resolved. The call is lazy on purpose —
+`resolve_config_path()` can seed a per-user `patterns.yaml` on first run, and a caller
+that supplied its own engine has asked for neither that file nor that side effect, so
+a test asserts no config is read *at all* in that case. Reading the file beside the
+module instead is wrong in a frozen build: that is the extraction directory, so the
+verifier would judge against shipped defaults while the cleaner used the user's edits.
 
 Anything that changes where files live at runtime belongs in `apppaths.py`, and
 needs a test in `tests/test_apppaths.py` — those rules only ever execute inside a

@@ -185,6 +185,37 @@ Detection rules are configured in `patterns.yaml`. The file is UTF-8 and contain
 Every regex in it is compiled when the app builds its engine, so a bad pattern is
 reported once — with its section and index — instead of failing every document.
 
+The same check covers the options where a mistake would otherwise be invisible.
+
+**Write `true` and `false` unquoted.** In YAML, `'false'` in quotes is the *string*
+"false", and a non-empty string counts as true — so quoting it turns the option on.
+That matters most for `formatting_only_removal`, where it would switch on the one
+setting that removes text with no pattern or style behind it. Quoted Booleans are now
+refused rather than misread:
+
+```yaml
+specifier_notes:
+  formatting_only_removal: false     # correct
+  formatting_only_removal: 'false'   # refused — this is a string, and it means true
+```
+
+**Write colours the way Word does** — six hexadecimal digits, as they appear in the
+document's `w:color` value:
+
+```yaml
+    colors:
+      - "FF0000"     # correct
+      - "#FF0000"    # accepted; the leading "#" is removed for you
+      - "bright red" # refused, with the section, key and position
+```
+
+A leading `#` is accepted because it has only one possible meaning. Anything else is
+refused at load time, which is a change worth knowing about: colours used to be taken
+as written, so `"bright red"` was accepted and then quietly matched nothing forever.
+
+Style names are **not** checked against your documents. Styles differ between
+templates, so a name none of your current files happens to use is not an error.
+
 ### Editorial artifacts use three tiers
 
 - `editorial_artifacts.text_patterns`: high-confidence patterns. The whole paragraph
