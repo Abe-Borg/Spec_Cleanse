@@ -18,6 +18,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from apppaths import resolve_config_path
+from batch import BatchItem, BatchPlan, FileOutcome, plan_batch, summarise
 from detection import DetectionEngine, ContentType
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
@@ -131,40 +132,61 @@ def _clean_one(
     engine: DetectionEngine,
     log,
     strip_revisions: bool = False,
-) -> bool:
-    """Run single-pass content removal on a single file."""
+) -> FileOutcome:
+    """Run single-pass content removal on a single file.
+
+    Writing the output and verifying it are separate outcomes.  A file whose
+    verification reported a preserve violation was written successfully and is
+    still not something to hand on unread, so it is neither a success nor a
+    failure: it needs review, and the caller is told which.
+    """
     processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
+    log("  Content removal...")
+    result: ProcessingResult = processor.process(
+        input_path=input_path,
+        output_path=output_path,
+    )
+
+    if not result.success:
+        for err in result.errors:
+            log(f"  ERROR: {err}")
+        return FileOutcome.FAILED
+
+    removed, redacted, preserved = _group_detections(result.detections)
+    log(f"    Removed {sum(len(v) for v in removed.values())} items,"
+        f" redacted {len(redacted)} inline placeholder(s),"
+        f" preserved {len(preserved)}")
+
+    # Things kept on purpose, where removing them would have gone beyond
+    # removing content.  Not failures, and not a reason to withhold the file.
+    for warning in result.warnings:
+        log(f"    NOTE: {warning}")
+
+    log("  Checking the output against the rules that produced it...")
     try:
-        log("  Content removal...")
-        result: ProcessingResult = processor.process(
-            input_path=input_path,
-            output_path=output_path,
-        )
-
-        if not result.success:
-            for err in result.errors:
-                log(f"  ERROR: {err}")
-            return False
-
-        removed, redacted, preserved = _group_detections(result.detections)
-        log(f"    Removed {sum(len(v) for v in removed.values())} items,"
-            f" redacted {len(redacted)} inline placeholder(s),"
-            f" preserved {len(preserved)}")
-
-        log("  Verifying no spec content was lost...")
         vresult = verify_clean(
             input_path, output_path, engine=engine, strip_revisions=strip_revisions
         )
-        _log_verification(vresult, log)
-
-        log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
-            f" {vresult.removed_characters:,} characters of text taken out")
-        return True
-
     except Exception as exc:
-        log(f"  FAILED: {exc}")
-        return False
+        # The file was written; only the check failed.  Saying nothing was
+        # produced would be false, and hiding the path would leave an
+        # unverified document sitting in the output folder unannounced.
+        log(f"  FAILED: the output could not be verified: {exc}")
+        if output_path.exists():
+            log(f"  The cleaned file was written but is UNVERIFIED: {output_path}")
+        return FileOutcome.FAILED
+
+    _log_verification(vresult, log)
+
+    log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
+        f" {vresult.removed_characters:,} characters of text taken out")
+
+    if vresult.passed:
+        return FileOutcome.VERIFIED
+
+    log(f"  NEEDS REVIEW — the cleaned file was written: {output_path}")
+    return FileOutcome.NEEDS_REVIEW
 
 
 def _log_verification(vresult, log) -> None:
@@ -182,7 +204,12 @@ def _log_verification(vresult, log) -> None:
             f" {len(vresult.unexpected_modifications)} unexpected)")
 
     if vresult.passed:
-        log("    PASS — every change matches a rule and the structure is intact")
+        # What this actually establishes: every difference between input and
+        # output was accounted for by a configured rule, and the structural
+        # checks found nothing the input did not already have.  It is not a
+        # statement that the document is correct, nor that Word will open it.
+        log("    PASS — no unexplained text changes or new checked structural "
+            "problems were found")
         return
 
     if vresult.structural:
@@ -461,11 +488,6 @@ class SpecCleanseGUI:
         except OSError as exc:
             self._log(f"Could not open {folder}: {exc}")
 
-    def _output_for(self, input_path: Path, output_dir: Path | None = None) -> Path:
-        stem = input_path.stem + "_cleaned"
-        parent = output_dir if output_dir else input_path.parent
-        return parent / (stem + ".docx")
-
     def _log(self, text: str):
         """Queue a line for the log; safe to call from the worker thread."""
         self._log_queue.put(text)
@@ -543,23 +565,52 @@ class SpecCleanseGUI:
         output_dir = self.output_dir
         strip_revisions = self.strip_revisions.get()
 
-        if not self._confirm_overwrite(files, output_dir):
+        # Work out every destination and check the whole set before opening a
+        # single file.  Two selected documents that share a basename land on one
+        # destination when a common output folder is chosen, and the second
+        # clean would silently replace the first.
+        plan = plan_batch(files, output_dir)
+        if not plan.ok:
+            self._reject_batch(plan)
+            return
+
+        if not self._confirm_overwrite(plan.existing_outputs):
             return
 
         self._disable_controls()
         self._clear_log()
         threading.Thread(
             target=self._run_clean,
-            args=(files, output_dir, strip_revisions),
+            args=(plan.items, strip_revisions),
             daemon=True,
         ).start()
 
-    def _confirm_overwrite(self, files: list[Path], output_dir: Path | None) -> bool:
-        """Ask before replacing cleaned files from an earlier run."""
-        existing = [
-            out for out in (self._output_for(f, output_dir) for f in files)
-            if out.exists()
-        ]
+    def _reject_batch(self, plan: BatchPlan) -> None:
+        """Refuse a batch whose destinations collide, before anything is written."""
+        self._clear_log()
+        self._log("Cannot start: the selected files do not have separate "
+                  "destinations.  Nothing was written.")
+        for conflict in plan.conflicts:
+            self._log("")
+            self._log("  " + conflict.describe().replace("\n", "\n  "))
+        self._log("")
+        self._log("Choose a different output folder, or clean these files in "
+                  "separate runs.")
+        self._set_status("Batch rejected — destinations collide")
+        messagebox.showerror(
+            "Conflicting destinations",
+            f"{len(plan.conflicts)} destination conflict(s) would cause a "
+            "cleaned file to be overwritten or an input destroyed.\n\n"
+            "Nothing was written.  See the log for the files involved.",
+            parent=self.root,
+        )
+
+    def _confirm_overwrite(self, existing: list[Path]) -> bool:
+        """Ask before replacing cleaned files from an earlier run.
+
+        Reached only once the batch's own destinations are known to be
+        distinct: there is nothing to confirm about a run that will not happen.
+        """
         if not existing:
             return True
 
@@ -652,37 +703,36 @@ class SpecCleanseGUI:
             self.root.after(0, self._enable_controls)
 
     def _run_clean(
-        self, files: list[Path], output_dir: Path | None, strip_revisions: bool = False
+        self, items: list[BatchItem], strip_revisions: bool = False
     ):
         try:
             engine = self._load_engine()
             if engine is None:
                 return
 
-            total = len(files)
-            successes = 0
-            failures = 0
+            total = len(items)
+            counts = {outcome: 0 for outcome in FileOutcome}
 
-            for i, fpath in enumerate(files, 1):
-                self._set_status(f"Cleaning {i}/{total}: {fpath.name}")
+            # The destinations were worked out and validated before this
+            # thread started.  They are not recomputed here: the selection and
+            # output folder are live widgets the user can change mid-run.
+            for i, item in enumerate(items, 1):
+                self._set_status(f"Cleaning {i}/{total}: {item.source.name}")
                 self._set_progress((i - 1) / total * 100)
-                self._log(f"[{i}/{total}] {fpath.name}")
+                self._log(f"[{i}/{total}] {item.source.name}")
 
-                out = self._output_for(fpath, output_dir)
-                ok = _clean_one(fpath, out, engine, self._log, strip_revisions)
-                if ok:
-                    successes += 1
-                    self._log(f"  -> {out.name}")
-                else:
-                    failures += 1
+                outcome = _clean_one(
+                    item.source, item.destination, engine, self._log, strip_revisions
+                )
+                counts[outcome] += 1
+                if outcome is not FileOutcome.FAILED:
+                    self._log(f"  -> {item.destination.name}")
 
                 self._log("")
 
             self._set_progress(100)
 
-            summary = f"Done: {successes} succeeded"
-            if failures:
-                summary += f", {failures} failed"
+            summary = summarise(counts)
             self._set_status(summary)
             self._log("=" * 50)
             self._log(summary)

@@ -263,6 +263,23 @@ def has_embedded_content(elem: etree._Element) -> bool:
     return False
 
 
+#: ``w:br/@w:type`` values that move content instead of just wrapping it.  A
+#: break with no type, or ``textWrapping``, is a soft line break.
+LAYOUT_BREAK_TYPES = frozenset({"page", "column"})
+
+
+def is_layout_break(node: etree._Element) -> bool:
+    """True if ``node`` is a ``w:br`` that starts a new page or column.
+
+    Text extraction renders every break as ``\n``, which makes a page break
+    look like ordinary whitespace to a pattern.  It is not: it is page setup,
+    and deleting one reflows the document from that point on.
+    """
+    if node.tag != f"{W}br":
+        return False
+    return (node.get(f"{W}type") or "") in LAYOUT_BREAK_TYPES
+
+
 def strip_text_leaves(elem: etree._Element) -> None:
     """Remove text-carrying leaves from ``elem``, keeping everything else.
 
@@ -321,6 +338,13 @@ def tidy_spans(text: str, spans: list[tuple[int, int]]) -> list[tuple[int, int]]
             end += 1
         tidied.append((start, end))
     return merge_spans(tidied)
+
+
+def spans_cover(spans: list[tuple[int, int]], start: int, end: int) -> bool:
+    """True if some span in ``spans`` contains all of ``[start, end)``."""
+    return any(
+        span_start <= start and span_end >= end for span_start, span_end in spans
+    )
 
 
 def cut_spans(text: str, spans: list[tuple[int, int]]) -> str:

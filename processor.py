@@ -26,6 +26,7 @@ from docx_xml import (
     field_chars_balanced,
     has_embedded_content,
     has_section_properties,
+    is_layout_break,
     iter_own_runs,
     iter_paragraphs,
     iter_text_nodes,
@@ -37,6 +38,7 @@ from docx_xml import (
     remove_comment_parts,
     run_text,
     set_text,
+    spans_cover,
     strip_comment_markers,
     strip_text_leaves,
     tidy_spans,
@@ -82,7 +84,11 @@ class ProcessingResult:
     output_path: Path
     detections: list[Detection] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
-    
+    #: Things worth telling the user that did not stop the run — a structure
+    #: kept because removing it would have gone beyond removing content.
+    #: Deliberately separate from ``errors``, which decide ``success``.
+    warnings: list[str] = field(default_factory=list)
+
     @property
     def success(self) -> bool:
         return len(self.errors) == 0
@@ -115,6 +121,7 @@ class DocxProcessor:
         # this it survives an ordinary clean along with its revision markup.
         self.strip_revisions = strip_revisions
         self._temp_dir: Optional[Path] = None
+        self._warnings: list[str] = []
     
     def process(self, input_path: Path, output_path: Path) -> ProcessingResult:
         """
@@ -128,6 +135,7 @@ class DocxProcessor:
             ProcessingResult with details of what was done
         """
         result = ProcessingResult(input_path=input_path, output_path=output_path)
+        self._warnings = []
 
         try:
             # Validate input
@@ -178,6 +186,7 @@ class DocxProcessor:
         except Exception as e:
             result.errors.append(f"Processing error: {str(e)}")
 
+        result.warnings.extend(self._warnings)
         return result
     
     def _is_valid_docx(self, path: Path) -> bool:
@@ -272,9 +281,61 @@ class DocxProcessor:
 
         text = paragraph_text(para)
         spans = tidy_spans(text, merge_spans(spans))
+        spans = self._drop_spans_over_layout_breaks(para, spans)
+        if not spans:
+            return None
         if not cut_spans(text, spans).strip():
             return []
         return spans
+
+    def _drop_spans_over_layout_breaks(
+        self, para: etree._Element, spans: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
+        """Abandon any redaction that straddles a page or column break.
+
+        The break renders as ``\n``, which is how it comes to sit inside a
+        placeholder in the first place, but it is page setup rather than
+        content and must survive (see :func:`docx_xml.is_layout_break`).
+
+        Cutting the text around it and leaving it stranded is worse than not
+        cutting at all.  It puts a page break in the middle of a requirement,
+        and it produces a paragraph no rule explains: verification computes the
+        expected text by cutting the whole placeholder, the output does not
+        match it, and the fallback then sees two fragments — the text before
+        the break and the text after — neither of which matches the placeholder
+        pattern on its own.  Every such file would be reported as needing
+        review for a decision the cleaner made deliberately.
+
+        So the placeholder is left where it stands and the reason is recorded.
+        The editorial text survives, which is the lesser cost.
+        """
+        breaks = self._layout_break_offsets(para)
+        if not breaks:
+            return spans
+
+        preview = self._preview(para)
+        kept: list[tuple[int, int]] = []
+        for span in spans:
+            if any(spans_cover([span], start, end) for start, end in breaks):
+                self._warn(
+                    "Left a placeholder in place because a page or column break "
+                    f"sits inside it: \"{preview}\""
+                )
+                continue
+            kept.append(span)
+        return kept
+
+    @staticmethod
+    def _layout_break_offsets(para: etree._Element) -> list[tuple[int, int]]:
+        """Character ranges of this paragraph's page and column breaks."""
+        offsets: list[tuple[int, int]] = []
+        offset = 0
+        for node, text in iter_text_nodes(para):
+            start = offset
+            offset += len(text)
+            if is_layout_break(node):
+                offsets.append((start, offset))
+        return offsets
 
     def _group_run_detections(
         self, para: etree._Element, detections: list[Detection]
@@ -413,18 +474,42 @@ class DocxProcessor:
         """Cut character ranges out of a paragraph's text, in place.
 
         The paragraph's text nodes are walked in document order with a running
-        offset, so each span is mapped back onto the ``w:t`` it came from.
+        offset, so each span is mapped back onto the node it came from.  A
+        ``w:t`` is edited; a separator that renders as a character — a tab, a
+        break, a non-breaking hyphen — is removed whole when the redaction
+        covers it, because it has no partial state to edit.
+
+        Advancing the offset past a separator without removing it is what left
+        ``Provide -units.`` behind: the hyphen inside ``[Verify quantity-with
+        Owner]`` was counted for the offsets and then never touched.
+
         Runs left holding nothing are removed; runs that still carry a picture
         or a field are kept.
         """
         touched_runs: list[etree._Element] = []
+        covered_separators: list[etree._Element] = []
         offset = 0
+        # Snapshot before the first edit: w:t nodes are rewritten as the walk
+        # goes, so a preview taken later would quote half-redacted text.
+        preview = self._preview(para)
 
         for node, text in list(iter_text_nodes(para)):
             start = offset
             offset += len(text)
 
             if node.tag != T_TAG:
+                if not spans_cover(spans, start, offset):
+                    continue
+                if is_layout_break(node):
+                    # Unreachable by the ordinary path — a span covering one of
+                    # these is abandoned in _drop_spans_over_layout_breaks
+                    # before any mutation.  Kept as the last line of defence,
+                    # because stranding a page break is not recoverable.
+                    continue
+                covered_separators.append(node)
+                run = self._owning_run(node, para)
+                if run is not None:
+                    touched_runs.append(run)
                 continue
 
             local = [
@@ -446,11 +531,29 @@ class DocxProcessor:
             else:
                 node.getparent().remove(node)
 
+        # Before the empty-run sweep below, so a run left holding nothing but
+        # a redacted separator is seen as empty.
+        for node in covered_separators:
+            parent = node.getparent()
+            if parent is not None:
+                parent.remove(node)
+
         for run in touched_runs:
             parent = run.getparent()
             if parent is None or has_embedded_content(run) or run_text(run):
                 continue
             parent.remove(run)
+
+    def _warn(self, message: str) -> None:
+        """Record something the user should know that did not stop the run."""
+        if message not in self._warnings:
+            self._warnings.append(message)
+
+    @staticmethod
+    def _preview(para: etree._Element, width: int = 60) -> str:
+        """A one-line excerpt of a paragraph, for a warning message."""
+        flat = " ".join(paragraph_text(para).split())
+        return flat if len(flat) <= width else flat[:width] + "..."
 
     def _owning_run(
         self, node: etree._Element, para: etree._Element

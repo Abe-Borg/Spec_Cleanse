@@ -1,12 +1,15 @@
 """The GUI's file-level workers, exercised without opening a window."""
 
 import unittest
+from unittest.mock import patch
 
+from batch import FileOutcome
 from tests import docx_builder as db
 from tests.support import DocxTestCase
 
 try:
     import gui
+    import verify
     GUI_IMPORTABLE = True
 except ImportError:  # pragma: no cover - environments without Tk
     GUI_IMPORTABLE = False
@@ -49,7 +52,9 @@ class WorkerTests(DocxTestCase):
         path = self.build(DOCUMENT)
         out = self.temp_dir / "out.docx"
 
-        self.assertTrue(gui._clean_one(path, out, self.make_engine(), self.log))
+        outcome = gui._clean_one(path, out, self.make_engine(), self.log)
+
+        self.assertIs(outcome, FileOutcome.VERIFIED)
         self.assertIn("PASS", self.output)
         self.assertIn("Paragraphs modified: 1", self.output)
         self.assertTrue(out.exists())
@@ -57,10 +62,53 @@ class WorkerTests(DocxTestCase):
     def test_clean_reports_a_missing_file_without_raising(self):
         out = self.temp_dir / "out.docx"
 
-        self.assertFalse(
-            gui._clean_one(self.temp_dir / "nope.docx", out, self.make_engine(), self.log)
+        outcome = gui._clean_one(
+            self.temp_dir / "nope.docx", out, self.make_engine(), self.log
         )
+
+        self.assertIs(outcome, FileOutcome.FAILED)
         self.assertIn("ERROR", self.output)
+
+    def test_a_failed_verification_is_not_a_success(self):
+        # The file is written and the write succeeded; the check did not pass.
+        # One Boolean cannot say that, which is how this used to be counted in
+        # the "succeeded" total.
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+        failing = verify.VerificationResult(input_path=path, output_path=out)
+        failing.removed.append(verify.RemovedParagraph("A real requirement.", None))
+
+        with patch.object(gui, "verify_clean", return_value=failing):
+            outcome = gui._clean_one(path, out, self.make_engine(), self.log)
+
+        self.assertIs(outcome, FileOutcome.NEEDS_REVIEW)
+        self.assertIn("NEEDS REVIEW", self.output)
+        self.assertIn(str(out), self.output)
+        self.assertTrue(out.exists())
+
+    def test_verification_raising_after_a_write_names_the_unverified_file(self):
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+
+        with patch.object(gui, "verify_clean", side_effect=RuntimeError("boom")):
+            outcome = gui._clean_one(path, out, self.make_engine(), self.log)
+
+        self.assertIs(outcome, FileOutcome.FAILED)
+        self.assertIn("UNVERIFIED", self.output)
+        self.assertIn(str(out), self.output)
+        self.assertTrue(out.exists())
+
+    def test_the_pass_line_does_not_overclaim(self):
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+
+        gui._clean_one(path, out, self.make_engine(), self.log)
+
+        # Verification shares its patterns with the cleaner, so a PASS is a
+        # consistency check, not proof the document is intact or that Word
+        # will open it.  The wording must not say otherwise.
+        self.assertNotIn("no spec content was lost", self.output)
+        self.assertNotIn("structure is intact", self.output)
 
     def test_build_engine_reports_a_broken_config(self):
         bad = self.temp_dir / "patterns.yaml"

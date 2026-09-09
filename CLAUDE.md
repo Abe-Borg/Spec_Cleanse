@@ -21,6 +21,7 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | Module | Purpose |
 |--------|---------|
 | `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
+| `batch.py` | Destination planning and collision rules, plus `FileOutcome`. Deliberately free of Tk so the rules are testable where `tkinter` is absent. Case folding is decided per *volume*, not per platform — `normcase` answers the wrong question, since a default macOS APFS volume ignores case while `posixpath.normcase` is the identity |
 | `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
 | `verify.py` | Post-processing verification: removals, modifications, structural lint |
@@ -115,11 +116,38 @@ that vanished entirely means only that the paragraph contained a placeholder —
 that losing it was intended. Verification asks the narrower question instead: does
 cutting every placeholder leave nothing behind?
 
+### Pairing an Input Paragraph With Its Survivor
+
+`_pair_with_survivor()` takes exact answers before guessing. An unchanged paragraph
+pairs outright; so does one matching `_expected_after_redaction()`, which computes
+from the source text and the configured patterns — never from anything the processor
+reports — what the paragraph becomes when every authorized placeholder is cut.
+
+Only when no exact answer exists does `MIN_PAIR_SIMILARITY` apply. That threshold
+reads as "about half the characters survived" and is not: for a pure deletion the
+ratio is `2*len(after)/(len(before)+len(after))`, which falls below 0.5 once *more
+than two-thirds* of the characters go. It therefore rejected exactly the redactions
+that worked best, which is the bug the exact path fixes.
+
+Recognising the exact result does not widen what counts as permitted — anything
+other than that text still faces the similarity path unchanged. In particular, a
+fragment classification that asks whether a lost fragment *contains* a pattern match
+rather than whether matches *cover* it is a separate, still-open defect; the
+`unittest.expectedFailure` case in `tests/test_verify.py` pins it.
+
 ### Dataclass-Based Results
 
 Processing results are communicated via dataclasses, not exceptions:
 - `Detection` — individual content detection with confidence, spans, formatting flag
-- `ProcessingResult` — detections plus an errors list
+- `ProcessingResult` — detections, an errors list, and a `warnings` list. Warnings
+  are things worth telling the user that did not stop the run — a structure kept
+  because removing it would have gone beyond removing content. They are separate
+  from `errors`, which decide `success`
+- `FileOutcome` — `VERIFIED` / `NEEDS_REVIEW` / `FAILED` (in `batch.py`). A
+  successful write and a passing verification are separate facts and one Boolean
+  cannot carry both; `_clean_one()` returns this, never a bool
+- `BatchPlan` / `BatchItem` / `BatchConflict` — the validated input/output pairs for
+  a run, built before anything is opened
 - `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a pattern name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained
 - `StyleInfo` / `StyleIndex` — `word/styles.xml` resolved for name and `w:basedOn` matching
 
@@ -166,6 +194,40 @@ Deleting a `w:p` element is wrong in four situations, and `_remove_paragraph` em
 Half-open `w:bookmarkStart`/`w:bookmarkEnd` and comment-range markers are relocated beside the paragraph before it is deleted — they are legal at block level, so the range keeps spanning the same content.
 
 There is no tail-text handling: in WordprocessingML an element tail is only inter-element whitespace, so preserving it protects nothing.
+
+### Inline Redaction and Separators
+
+`iter_text_nodes()` yields `w:t` **and** the separator elements that render as a
+character — `w:tab`, `w:br`, `w:cr`, `w:ptab`, `w:noBreakHyphen`. `_redact_spans()`
+walks that stream with a running offset, so a redaction span can land on any of
+them. A `w:t` is edited; a separator has no partial state, so it is removed whole
+when a span covers all of it and left alone otherwise. Removal happens *before* the
+empty-run sweep, so a run holding nothing but a redacted separator is seen as empty.
+
+Advancing the offset past a separator without removing it is what left
+`Provide -units.` behind.
+
+**Page and column breaks are the exception, and the whole redaction is abandoned
+rather than half-completed.** Extraction renders every `w:br` as `\n`, which is what
+lets one fall inside a match at all, but a break carrying `w:type="page"` or
+`"column"` is page setup rather than content — removing it reflows the document from
+that point on, a larger claim than any editorial pattern makes.
+
+Cutting the text *around* such a break and stranding it is worse than not cutting:
+it leaves a page break mid-requirement, and it produces a paragraph no rule
+explains. Verification computes the expected text by cutting the whole placeholder,
+the output does not match it, and the diff fallback then sees two fragments — the
+text before the break and the text after — neither of which matches the placeholder
+pattern alone. Every such file would be reported as needing review for a decision
+the cleaner made on purpose.
+
+So `_drop_spans_over_layout_breaks()` discards any span straddling one, before any
+mutation, and records why. The placeholder survives; that is the lesser cost. Other
+spans in the same paragraph are still cut. A soft break (no type, or
+`textWrapping`) is whitespace and goes with the text around it.
+`docx_xml.is_layout_break()` states the distinction; the policy is the processor's.
+The guard inside `_redact_spans()` is unreachable by the ordinary path and kept only
+as a last line of defence, because stranding a break is not recoverable.
 
 ### Files Walked
 
@@ -256,6 +318,19 @@ python -m unittest discover -s tests -t .
 Stdlib `unittest`, no new dependency. `tests/docx_builder.py` assembles synthetic `.docx` files with `zipfile`, so structural cases — a sole paragraph in a footer, a cell that would stop ending with a paragraph, a `w:sectPr` paragraph, an unbalanced field — are covered without binary fixtures. `tests/support.py` provides `DocxTestCase` with `build()`, `clean()`, `detect()`, and parsed-XML assertions. GUI tests skip where `tkinter` is unavailable.
 
 Add a test whenever you touch removal safety, the pattern tiers, or verification classification.
+
+Two conventions matter here:
+
+- **GUI tests skip wherever `tkinter` is absent**, which is every Linux run. Logic
+  that needs testing must not live in `gui.py`; that is why `batch.py` exists. When
+  changing `gui.py`, say plainly that its tests did not execute rather than reporting
+  a green suite as though they had.
+- **A test that anticipates a later fix is carried under `unittest.expectedFailure`,
+  never as an ordinary failing test.** A permanently red suite cannot validate
+  anything, and hides real regressions. The decorator keeps the suite green while the
+  defect stands and turns it red — `unexpected successes=1`, exit code 1 — the moment
+  the behaviour changes, so the tripwire fires in both directions and the decorator
+  cannot be forgotten.
 
 ### Manual Testing Workflow
 
