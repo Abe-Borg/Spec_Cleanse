@@ -21,7 +21,7 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | Module | Purpose |
 |--------|---------|
 | `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
-| `batch.py` | Destination planning and collision rules, plus `FileOutcome`. Deliberately free of Tk so the rules are testable where `tkinter` is absent. Case folding is decided per *volume*, not per platform — `normcase` answers the wrong question, since a default macOS APFS volume ignores case while `posixpath.normcase` is the identity |
+| `batch.py` | Destination planning and collision rules, the run loop, and the outcome vocabulary — `FileOutcome`, `ReviewCategory`, `FileReport`, `RunTally`, `run_batch`. Deliberately free of Tk *and* of every other project module, so the rules are testable where `tkinter` is absent. Case folding is decided per *volume*, not per platform — `normcase` answers the wrong question, since a default macOS APFS volume ignores case while `posixpath.normcase` is the identity |
 | `detection.py` | Pattern matching engine with confidence scoring; all detector classes; and `paragraph_evidence()`, which states what policy permits losing from a source paragraph |
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
 | `verify.py` | Post-processing verification: comparison and classification against the source evidence — removals, modifications, structural lint |
@@ -297,6 +297,68 @@ them. An offset computed against a trimmed or normalized string addresses the wr
 characters. `offsets_reliable` is `False` if run texts ever fail to reconstruct the
 paragraph, and interval reasoning is then abandoned rather than guessed at.
 
+### Why a File Needs Review
+
+"Needs review" on its own cannot be acted on. Reading a document for a lost
+requirement, fixing a `patterns.yaml`, and checking a cross-reference are three
+different jobs, and a verdict that does not say which will be ignored. Every
+outcome names its categories, they are counted separately and never pooled, and
+a file genuinely in more than one is reported in all of them.
+
+| Category | Means | Comes from |
+|---|---|---|
+| `AMBIGUOUS_ALIGNMENT` | something is unexplained and where it came from is a guess | an unexplained finding whose pairing was the `MIN_PAIR_SIMILARITY` fallback, or whose offsets were unreliable |
+| `DETECTED_DAMAGE` | a claim about the document | preserve violations, added paragraphs, structural damage, and unexplained findings reached on an *exact* alignment |
+| `CONFIGURATION` | the rules that produced this file are worth knowing about | `detection.config_notices()` |
+| `REFERENCE_NUMBERING` | nothing was lost; what a reader sees may differ | `VerificationResult.numbering`, and structural violations of `kind == "reference"` |
+
+**The first two split on how the verdict was reached, not on how bad it sounds.**
+Where the pairing was a guess, what the report establishes is that the comparison
+could not follow the change — a real pair on that path reported the fragments
+`nd hangers a` and ` on drawings`, artefacts of where the differ happened to
+align rather than text anyone edited out. Calling that damage overstates it in
+exactly the direction that trains a user to ignore the verdict. §10.6 wants the
+two counted apart for the same reason: a Needs-review rate dominated by ambiguous
+alignment is a reason to revisit the comparison, and one dominated by damage is a
+different problem with a different fix.
+
+**A category is decided by a field, never by reading the message.**
+`StructuralViolation.kind` exists so that the sentence shown to the user is free
+to change without silently reclassifying anything.
+
+**Configuration is not visible to verification**, because nothing in a comparison
+of two documents can see it — `review_categories()` deliberately omits it and
+`_clean_one` adds it. It is decided once per run: the configuration cannot change
+between two files in one batch. A notice makes *every* file in the run need
+review, which is the intended reading. Verification shares its patterns with the
+cleaner, so a pass means the output agrees with the rules it was given; when
+those rules include removal on formatting alone, agreement is not evidence the
+file can be handed on unread.
+
+**`VerificationResult.passed` stays the authority on the comparison, with the
+categories as the explanation.** Deriving the verdict from the categories is
+equivalent today and would fail silently the moment something new contributes to
+`passed` without a matching category — a real failure reported as Verified. A
+subTest over every contributor asserts the two agree.
+
+### Running a Batch
+
+`batch.run_batch()` owns the loop, not `gui.py`, for the reason `batch.py` exists:
+"the batch kept going after one file failed" is not a claim worth making untested,
+and it was not true. `DocxProcessor.process()` turns its own exceptions into
+errors, but anything raised around it ended the whole run. One file's unexpected
+failure is now that file's.
+
+It is handed the manifest `plan_batch()` validated before the worker started and
+never recomputes a destination. The file selection and output folder are live
+widgets; a destination worked out mid-run could collide with one already written —
+the loss `plan_batch` exists to prevent, reintroduced after its check had passed.
+
+`FileReport.output_written` is separate from the outcome because a failure can
+still leave a document on disk — verification raising after a successful write is
+exactly that — and a reader told only "1 failed" cannot tell whether there is
+something in the output folder to delete.
+
 ### Dataclass-Based Results
 
 Processing results are communicated via dataclasses, not exceptions:
@@ -307,7 +369,11 @@ Processing results are communicated via dataclasses, not exceptions:
   from `errors`, which decide `success`
 - `FileOutcome` — `VERIFIED` / `NEEDS_REVIEW` / `FAILED` (in `batch.py`). A
   successful write and a passing verification are separate facts and one Boolean
-  cannot carry both; `_clean_one()` returns this, never a bool
+  cannot carry both
+- `ReviewCategory` / `FileReport` / `RunTally` (in `batch.py`) — why a file needs
+  review, what became of one file, and a run's running counts. `_clean_one()`
+  returns a `FileReport`, never a bare outcome: "needs review" on its own cannot
+  be acted on
 - `BatchPlan` / `BatchItem` / `BatchConflict` — the validated input/output pairs for
   a run, built before anything is opened
 - `RunEvidence` / `ParagraphEvidence` — what policy permits losing from one *source*
@@ -315,7 +381,7 @@ Processing results are communicated via dataclasses, not exceptions:
   paragraph text; `ParagraphEvidence` carries whole-paragraph authority, placeholder
   intervals, and the preserve reason. This is the type that replaced a flattened list
   of `(category, regex)` pairs, and *scope* is the thing it carries that the list could not
-- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a detector name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained
+- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a detector name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained. An unexplained finding also carries `ambiguous`, and a `StructuralViolation` carries `kind`
 - `StyleInfo` / `StyleIndex` — `word/styles.xml` resolved for name and `w:basedOn` matching
 
 Errors accumulate in result objects; processing doesn't halt on non-fatal issues.

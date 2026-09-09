@@ -1384,6 +1384,70 @@ behavior.** Run this package's tests on Windows before accepting it.
 the verified count; every Needs-review outcome names its category; output disposition is explicit; the
 package's tests have actually executed on Windows.
 
+### 14.3 What W07 found
+
+Each of the three concerns was reproduced against a real clean before anything was designed.
+
+**The category split needed data that did not exist.** Two of §10.6's four categories had no signal at
+all. A broken reference was a `StructuralViolation` like any other, so it read as damage; ambiguous
+alignment had nothing to read whatsoever. Neither could have been counted separately, which is what
+criterion 3 asks for and what this package's non-gating requirement carries to the GUI.
+
+The line between ambiguous alignment and detected damage is the substantive decision here, and it was
+taken from measurement rather than from the words. It turns on **how the verdict was reached, not how
+bad it sounds.** A preserve violation, an invented paragraph or a structural problem is a claim about
+the document — the comparison knew what it was looking at. An unexplained removal or modification is
+such a claim only where the alignment behind it was exact. Where the pairing came from
+`MIN_PAIR_SIMILARITY`, a real pair reported the fragments `nd hangers a` and ` on drawings`: artefacts
+of where the differ happened to align, not text anyone edited out. Reporting that as damage overstates
+it in exactly the direction that trains a user to ignore the verdict.
+
+Unreliable offsets land in the same category and for the same reason — they make every interval
+question answer "no authority" whatever the paragraph holds, so the absence of one says nothing about
+the document. That guard proved **not** reachable through ordinary content: a tab-separated paragraph
+still reconstructs exactly. It is recorded as a contributor, not as a measured source of notices.
+
+Two identical paragraphs where one disappears is *not* ambiguous in any consequential sense, and is
+classified as damage. The candidates agree in text and signature, so the verdict is the same whichever
+is blamed. Ambiguity that changes nothing is not worth a category.
+
+**A configuration notice never reached the outcome.** `config_notices` was logged once at engine load,
+and a file cleaned with `formatting_only_removal` on was reported `outcome='verified' categories=[]`.
+§14.1 lists a configuration concern as a Needs-review trigger, and the reasoning holds: verification
+shares its patterns with the cleaner, so a pass means the output agrees with the rules it was given,
+and agreement with the one path that removes text on no content evidence is not evidence the file can
+be handed on unread.
+
+**The consequence is stated rather than discovered later: with such a configuration every file in the
+run needs review.** That is the intended reading. It is also exactly what criterion 3 wants counted
+apart — if Needs-review on real documents turns out to be dominated by this category, the finding is
+about a user's `patterns.yaml`, not about the cleaner.
+
+**The batch did not survive one file's failure.** `DocxProcessor.process()` turns its own exceptions
+into errors, so §14.2's "processing exception" case was already safe; anything raised *around* it
+reached the run's outer handler and stopped it, leaving every remaining file unprocessed with nothing
+in the log to say why. The loop moved from `gui.py` into `batch.py` so that the fix is testable where
+`tkinter` is absent — the reason that module exists.
+
+**`passed` stays the authority on the comparison, with the categories as the explanation.** Deriving
+the verdict from the categories is equivalent today and would fail silently the moment something new
+contributes to `passed` without a matching category: a real failure reported as Verified. A subTest
+over all seven contributors asserts the two agree, and it fires when the numbering branch is removed.
+
+**What this does not establish.** The exit gate's last clause — "the package's tests have actually
+executed on Windows" — is not met from this workspace. The thirteen GUI tests skip where `tkinter` is
+absent, and skipped GUI tests establish nothing about Windows GUI behaviour, which is the gate's own
+point. They were exercised under a stubbed `tkinter`, which proves the workers run and their logic is
+right, not that the window behaves. CI's Windows lanes execute them; that is the evidence to read.
+
+Recorded because it caught four real regressions: the plain Linux run reported `Ran 349 tests ... OK
+(skipped=9)` while four GUI tests were already broken by this package's own change. Only the stubbed
+run showed it. **Read the skip count; a green suite on a host without Tk is not a green suite.**
+
+The false-alarm rate of the new categories on real specifications is unmeasured, the same gap already
+recorded for the W02 default, the W03 acceptance criteria and W06's numbering notices. No corpus was
+available. The categories now exist to count it, which is the prerequisite criterion 3 was asking for.
+
 ## 15. W08: configuration fallback, validation, and CI
 
 ### 15.1 Use the shared resolver

@@ -118,16 +118,49 @@ after you confirm, once the batch's own destinations are known to be distinct.
 ### What the summary means
 
 Each file ends in one of three states, and the run's summary counts them
-separately — `Done: 8 verified, 2 need review, 1 failed.`
+separately:
+
+```text
+Done: 8 verified, 2 need review (1 detected damage, 1 configuration notice), 1 failed
+```
 
 | Outcome | Meaning |
 |---|---|
 | **Verified** | Written, and every difference between input and output was accounted for. |
-| **Needs review** | Written, but verification did not pass. The file is still produced and its path is named in the log; read the log before using it. |
-| **Failed** | Processing failed, or verification could not run at all. If the file was written before the check failed, the log says so and names it as unverified. |
+| **Needs review** | Written, but something remains for you to look at. The file is still produced and its path is named in the log, along with the reason. |
+| **Failed** | Processing failed, or verification could not run at all. If the file was written before the check failed, the summary says how many failures left a file behind and the log names it as unverified. |
 
 A successful write and a passing verification are separate facts. There is
 deliberately no "succeeded" total, because that word used to cover both.
+
+### Why a file needs review
+
+"Needs review" on its own does not tell you what to do. Reading a document for a
+missing requirement, fixing your `patterns.yaml`, and checking a cross-reference
+are three different jobs, so every such file names its reason. A file can be in
+more than one category, and is then counted in each.
+
+| Reason | What it means | What to do |
+|---|---|---|
+| **Detected damage** | Text is gone, or the output has text the input did not, and the comparison knew exactly what it was looking at. | Read the named paragraphs in the log and compare them against the original. |
+| **Ambiguous alignment** | Something is unexplained, but which paragraph it belongs to is a guess. | Open the file and look; the fragments quoted in the log may be artefacts of the comparison rather than text that was really cut. |
+| **Configuration notice** | The rules that produced the file are worth knowing about — usually formatting-only removal being on, or a pattern that was later narrowed. | Look at your `patterns.yaml`. Nothing is necessarily wrong with the document. |
+| **Reference/numbering warning** | A cross-reference this run broke, or a removed paragraph that took part in automatic numbering. | Check the named reference, or the numbering a reader will see. Nothing was lost. |
+
+The distinction between the first two is deliberate and worth knowing. Where the
+comparison could not follow what happened, saying so is more useful than calling
+it damage — the fragments it reports in that case are artefacts of where the two
+versions happened to line up, not text anyone edited out.
+
+**A configuration notice makes every file in the run need review.** That is
+intended. Verification uses the same patterns as the cleaner, so a pass means the
+output agrees with the rules it was given; when those rules include removing text
+on formatting alone — the one setting that removes text with no pattern or style
+behind it, and real specification text is routinely red and italic — that
+agreement is not a reason to hand the file on unread.
+
+One file's failure does not stop the rest of the batch. If a file fails
+unexpectedly, it is counted as that file's failure and the run continues.
 
 ### Strip comments and accept tracked changes (optional, off by default)
 
