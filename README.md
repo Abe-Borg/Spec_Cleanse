@@ -103,9 +103,14 @@ whole set. Two conflicts stop the run:
   that input would be destroyed before its turn came.
 
 Either one rejects the batch with nothing written, and the log names the files
-involved. Choose a different output folder, or clean them in separate runs. Paths
-are compared as the filesystem sees them, so two spellings of one file — a different
-case on Windows, a symlink, a relative path — are recognised as the same file.
+involved. Choose a different output folder, or clean them in separate runs.
+
+Paths are compared as the filesystem sees them, so two spellings of one file — a
+symlink, a relative path, a different case — are recognised as the same file.
+Whether case matters is asked of the volume rather than assumed from the operating
+system: a default macOS volume ignores case even though POSIX conventionally does
+not, and a Windows volume can be case-sensitive per directory. The check is
+read-only and writes nothing.
 
 Cleaned files that already exist from an earlier run are still only overwritten
 after you confirm, once the batch's own destinations are known to be distinct.

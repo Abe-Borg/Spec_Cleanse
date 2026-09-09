@@ -65,26 +65,87 @@ def output_for(input_path: Path, output_dir: Path | None = None) -> Path:
     return parent / (input_path.stem + OUTPUT_SUFFIX + ".docx")
 
 
-def _key(path: Path) -> str:
+#: True where the platform's own convention ignores case — the fallback when a
+#: volume cannot be probed.
+_PLATFORM_IGNORES_CASE = os.path.normcase("A") == "a"
+
+
+def volume_ignores_case(path: Path) -> bool:
+    """Whether the volume holding ``path`` treats two spellings of a name as one.
+
+    ``normcase`` answers for the *platform*, which is a different question. A
+    default macOS APFS volume ignores case while ``posixpath.normcase`` is the
+    identity, so two destinations differing only in case read as two files when
+    they are one — and the second clean replaces the first, which is the exact
+    loss this module exists to prevent. Windows volumes can be case-sensitive
+    per directory, so the converse holds too.
+
+    Probed read-only. The nearest existing ancestor has its own name respelled
+    in the opposite case; if that still resolves, the volume ignores case.
+    Where there is nothing to probe — no existing ancestor, or a name with no
+    letters in it — the platform's convention is the fallback.
+
+    A case-sensitive volume that genuinely holds both spellings answers
+    "ignores case" here. That is wrong, and it is wrong in the safe direction:
+    it can only cause a batch to be rejected, never a file to be overwritten.
+    """
+    for candidate in (path, *path.parents):
+        if not candidate.exists():
+            continue
+        flipped = candidate.name.swapcase()
+        if not flipped or flipped == candidate.name:
+            continue  # a root, or a name with no letters to flip
+        return candidate.with_name(flipped).exists()
+
+    return _PLATFORM_IGNORES_CASE
+
+
+def _key(path: Path, fold_case: bool) -> str:
     """A comparison key under which two spellings of one file are equal.
 
-    ``normcase`` folds case and separators on Windows and does nothing on
-    POSIX.  ``realpath`` resolves symlinks, ``.`` and ``..`` segments, and
-    relative spellings; for a path that does not exist yet it still normalises
-    the part of it that does.
+    ``normcase`` folds separators on Windows (and case, there, already);
+    ``realpath`` resolves symlinks, ``.`` and ``..`` segments, and relative
+    spellings, and for a path that does not exist yet it still normalises the
+    part of it that does. ``fold_case`` supplies what ``normcase`` cannot: the
+    answer for the volume this path is actually on.
     """
-    return os.path.normcase(os.path.realpath(path))
+    normalised = os.path.normcase(os.path.realpath(path))
+    return normalised.lower() if fold_case else normalised
 
 
-def same_file(left: Path, right: Path) -> bool:
+class _Keyer:
+    """Builds comparison keys, remembering each directory's case semantics.
+
+    Probing touches the filesystem, and a batch asks about the same handful of
+    directories repeatedly.
+    """
+
+    def __init__(self) -> None:
+        self._folds: dict[Path, bool] = {}
+
+    def folds_case(self, path: Path) -> bool:
+        parent = path.parent
+        if parent not in self._folds:
+            self._folds[parent] = volume_ignores_case(parent)
+        return self._folds[parent]
+
+    def __call__(self, path: Path) -> str:
+        return _key(path, self.folds_case(path))
+
+
+def same_file(left: Path, right: Path, keyer: "_Keyer | None" = None) -> bool:
     """True if two paths denote one file.
 
     String inequality does not prove two paths are different files: they can
-    differ by case on Windows, by a symlink, or by a relative spelling.  Where
-    both exist the filesystem is asked directly, which also catches hard links
-    and junctions that ``realpath`` does not collapse.
+    differ by case, by a symlink, or by a relative spelling. Where both exist
+    the filesystem is asked directly, which also catches hard links and
+    junctions that ``realpath`` does not collapse. Case is folded when *either*
+    side sits on a volume that ignores it, since one of the two may not exist
+    yet and so cannot be probed on its own.
     """
-    if _key(left) == _key(right):
+    keyer = keyer or _Keyer()
+    fold = keyer.folds_case(left) or keyer.folds_case(right)
+    if _key(left, fold) == _key(right, fold):
         return True
     try:
         return os.path.samefile(left, right)
@@ -158,12 +219,13 @@ def plan_batch(files: list[Path], output_dir: Path | None = None) -> BatchPlan:
              for path in files]
 
     conflicts: list[BatchConflict] = []
+    keyer = _Keyer()
 
     # Several inputs sharing one destination.  Grouped by key rather than by
     # the Path itself so that two spellings of one destination still collide.
     by_destination: dict[str, list[BatchItem]] = {}
     for item in items:
-        by_destination.setdefault(_key(item.destination), []).append(item)
+        by_destination.setdefault(keyer(item.destination), []).append(item)
 
     for group in by_destination.values():
         if len(group) > 1:
@@ -182,7 +244,7 @@ def plan_batch(files: list[Path], output_dir: Path | None = None) -> BatchPlan:
     for item in items:
         clashing = [
             other.source for other in items
-            if other is not item and same_file(item.destination, other.source)
+            if other is not item and same_file(item.destination, other.source, keyer)
         ]
         if clashing:
             conflicts.append(BatchConflict(

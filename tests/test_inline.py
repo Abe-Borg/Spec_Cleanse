@@ -4,6 +4,7 @@ import unittest
 
 from detection import ContentType
 from docx_xml import W_NS
+from verify import verify_clean
 
 from tests import docx_builder as db
 from tests.support import DocxTestCase
@@ -113,23 +114,49 @@ class SeparatorRedactionTests(DocxTestCase):
         )
         self.assertEqual(self.count_tags(out, "tab"), 1)
 
-    def test_a_page_break_inside_a_placeholder_is_kept(self):
+    def test_a_placeholder_straddling_a_page_break_is_left_alone(self):
         # A page break renders as "\n" and so can fall inside a match, but it
-        # is page setup, not content.  Removing it would reflow the document
-        # from that point on, which is a bigger claim than any pattern makes.
+        # is page setup, not content.  Cutting the text around it and leaving
+        # it stranded would put a page break in the middle of a requirement,
+        # so the placeholder is abandoned instead.  The editorial text
+        # surviving is the lesser cost.
         path = self.build(db.document(db.para(
             db.run("Provide "),
             db.run("[Verify quantity", inner='<w:br w:type="page"/>'),
             db.run("with Owner] units."),
         )))
-        result, out = self.clean(path)
+        _, out = self.clean(path)
 
+        self.assertEqual(
+            self.paragraph_texts(out), ["Provide [Verify quantity\nwith Owner] units."]
+        )
         self.assertEqual(self.count_tags(out, "br"), 1)
         self.assertEqual(
             self.root(out).find(f".//{{{W_NS}}}br").get(f"{{{W_NS}}}type"), "page"
         )
 
-    def test_a_kept_layout_break_is_reported(self):
+    def test_such_a_paragraph_does_not_make_the_file_need_review(self):
+        # Half-redacting it produced a paragraph no rule explained: the
+        # expected text assumes the whole placeholder went, and the diff
+        # fallback sees the text before and after the break as two fragments,
+        # neither matching the placeholder pattern.  Every such file was
+        # reported as needing review for a decision the cleaner made on purpose.
+        path = self.build(db.document(db.para(
+            db.run("Provide "),
+            db.run("[Verify quantity", inner='<w:br w:type="page"/>'),
+            db.run("with Owner] units."),
+        )))
+        engine = self.make_engine()
+        _, out = self.clean(path, engine)
+
+        result = verify_clean(path, out, engine=engine)
+
+        self.assertTrue(
+            result.passed,
+            [m.fragments for m in result.unexpected_modifications],
+        )
+
+    def test_an_abandoned_placeholder_is_reported(self):
         path = self.build(db.document(db.para(
             db.run("Provide "),
             db.run("[Verify quantity", inner='<w:br w:type="column"/>'),
@@ -137,11 +164,25 @@ class SeparatorRedactionTests(DocxTestCase):
         )))
         result, _ = self.clean(path)
 
-        self.assertTrue(result.success, "a kept break is a warning, not an error")
+        self.assertTrue(result.success, "this is a warning, not an error")
         self.assertEqual(len(result.warnings), 1)
         self.assertIn("page or column break", result.warnings[0])
-        # The excerpt quotes the paragraph as it arrived, not half-redacted.
+        # The excerpt quotes the paragraph as it arrived.
         self.assertIn("Provide [Verify quantity with Owner] units.", result.warnings[0])
+
+    def test_another_placeholder_in_the_same_paragraph_is_still_cut(self):
+        # Only the span that straddles the break is abandoned.
+        path = self.build(db.document(db.para(
+            db.run("Provide "),
+            db.run("[Verify quantity", inner='<w:br w:type="page"/>'),
+            db.run("with Owner] units of [Verify type] pipe."),
+        )))
+        _, out = self.clean(path)
+
+        text = self.paragraph_texts(out)[0]
+        self.assertIn("[Verify quantity", text, "the straddling one stays")
+        self.assertNotIn("[Verify type]", text, "the clean one still goes")
+        self.assertEqual(text, "Provide [Verify quantity\nwith Owner] units of pipe.")
 
     def test_an_ordinary_clean_warns_about_nothing(self):
         path = self.build(db.document(

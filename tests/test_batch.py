@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import batch
 from batch import (
     BatchItem,
     FileOutcome,
@@ -18,6 +19,7 @@ from batch import (
     plan_batch,
     same_file,
     summarise,
+    volume_ignores_case,
 )
 
 
@@ -105,6 +107,43 @@ class PlanBatchTests(unittest.TestCase):
 
         self.assertTrue(plan.ok)
 
+    def test_case_only_collision_is_caught_on_a_case_insensitive_posix_volume(self):
+        # The platform and the volume answer different questions.  A default
+        # macOS APFS volume ignores case while posixpath.normcase is the
+        # identity, so normcase alone would call these two files and let the
+        # second clean replace the first.
+        self.assertEqual(os.path.normcase("Spec.docx"), "Spec.docx",
+                         "this test is only meaningful where normcase is identity")
+
+        with patch.object(batch, "volume_ignores_case", return_value=True):
+            plan = plan_batch(
+                [Path("/proj/A/Spec.docx"), Path("/proj/B/SPEC.docx")],
+                Path("/out"),
+            )
+
+        self.assertFalse(plan.ok)
+        self.assertEqual(plan.conflicts[0].kind, "shared_destination")
+
+    def test_the_same_pair_is_allowed_on_a_case_sensitive_volume(self):
+        with patch.object(batch, "volume_ignores_case", return_value=False):
+            plan = plan_batch(
+                [Path("/proj/A/Spec.docx"), Path("/proj/B/SPEC.docx")],
+                Path("/out"),
+            )
+
+        self.assertTrue(plan.ok)
+
+    def test_a_destination_that_is_an_input_in_another_case_is_rejected(self):
+        with patch.object(batch, "volume_ignores_case", return_value=True):
+            plan = plan_batch(
+                [Path("/x/foo.docx"), Path("/x/FOO_CLEANED.docx")], None
+            )
+
+        self.assertFalse(plan.ok)
+        self.assertTrue(
+            any(c.kind == "destination_is_input" for c in plan.conflicts)
+        )
+
     def test_destination_that_is_another_selected_input_is_rejected(self):
         # Cleaning foo.docx writes foo_cleaned.docx, which is also selected.
         # Processing is sequential, so it would be destroyed before its turn.
@@ -185,6 +224,28 @@ class ExistingPathTests(unittest.TestCase):
 
     def test_same_file_is_false_for_two_missing_paths(self):
         self.assertFalse(same_file(self.dir / "no.docx", self.dir / "nope.docx"))
+
+    def test_the_volume_probe_answers_for_a_real_directory(self):
+        # Whatever this host's filesystem does, the probe must answer without
+        # raising and without writing anything into the directory.
+        before = sorted(entry.name for entry in self.dir.iterdir())
+
+        answer = volume_ignores_case(self.dir)
+
+        self.assertIsInstance(answer, bool)
+        self.assertEqual(sorted(e.name for e in self.dir.iterdir()), before)
+
+    def test_the_volume_probe_answers_for_a_directory_yet_to_be_created(self):
+        # The output folder need not exist when the batch is planned; the
+        # nearest existing ancestor decides.
+        self.assertIsInstance(
+            volume_ignores_case(self.dir / "not" / "created" / "yet"), bool
+        )
+
+    def test_the_volume_probe_falls_back_to_the_platform_when_nothing_exists(self):
+        answer = volume_ignores_case(Path("/nonexistent-root-xyz/deep/path"))
+
+        self.assertEqual(answer, os.path.normcase("A") == "a")
 
 
 class SummariseTests(unittest.TestCase):

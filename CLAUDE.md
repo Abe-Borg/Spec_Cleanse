@@ -21,7 +21,7 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | Module | Purpose |
 |--------|---------|
 | `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
-| `batch.py` | Destination planning and collision rules, plus `FileOutcome`. Deliberately free of Tk so the rules are testable where `tkinter` is absent |
+| `batch.py` | Destination planning and collision rules, plus `FileOutcome`. Deliberately free of Tk so the rules are testable where `tkinter` is absent. Case folding is decided per *volume*, not per platform — `normcase` answers the wrong question, since a default macOS APFS volume ignores case while `posixpath.normcase` is the identity |
 | `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
 | `verify.py` | Post-processing verification: removals, modifications, structural lint |
@@ -207,14 +207,27 @@ empty-run sweep, so a run holding nothing but a redacted separator is seen as em
 Advancing the offset past a separator without removing it is what left
 `Provide -units.` behind.
 
-**Page and column breaks are the exception.** Extraction renders every `w:br` as
-`\n`, which is what lets one fall inside a match at all, but a break carrying
-`w:type="page"` or `"column"` is page setup rather than content — removing it
-reflows the document from that point on, a larger claim than any editorial pattern
-makes. Such a break is kept and a warning is recorded on `ProcessingResult`. A soft
-break (no type, or `textWrapping`) is whitespace and goes with the text around it.
-`docx_xml.is_layout_break()` states the distinction; the policy of keeping it is the
-processor's.
+**Page and column breaks are the exception, and the whole redaction is abandoned
+rather than half-completed.** Extraction renders every `w:br` as `\n`, which is what
+lets one fall inside a match at all, but a break carrying `w:type="page"` or
+`"column"` is page setup rather than content — removing it reflows the document from
+that point on, a larger claim than any editorial pattern makes.
+
+Cutting the text *around* such a break and stranding it is worse than not cutting:
+it leaves a page break mid-requirement, and it produces a paragraph no rule
+explains. Verification computes the expected text by cutting the whole placeholder,
+the output does not match it, and the diff fallback then sees two fragments — the
+text before the break and the text after — neither of which matches the placeholder
+pattern alone. Every such file would be reported as needing review for a decision
+the cleaner made on purpose.
+
+So `_drop_spans_over_layout_breaks()` discards any span straddling one, before any
+mutation, and records why. The placeholder survives; that is the lesser cost. Other
+spans in the same paragraph are still cut. A soft break (no type, or
+`textWrapping`) is whitespace and goes with the text around it.
+`docx_xml.is_layout_break()` states the distinction; the policy is the processor's.
+The guard inside `_redact_spans()` is unreachable by the ordinary path and kept only
+as a last line of defence, because stranding a break is not recoverable.
 
 ### Files Walked
 

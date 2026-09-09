@@ -15,8 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document of the wrong source. Every destination is now worked out and the whole
   set checked before any file is opened, and a batch whose destinations collide —
   or one whose destination is itself a selected input — is rejected with nothing
-  written. Paths are compared as the filesystem sees them, so a different case on
-  Windows, a symlink or a relative spelling is recognised as the same file.
+  written. Paths are compared as the filesystem sees them, so a symlink, a
+  relative spelling or a different case is recognised as the same file. Whether
+  case matters is probed on the volume rather than assumed from the platform —
+  `normcase` answers for the operating system, and a default macOS volume ignores
+  case while POSIX conventionally does not.
 - A failed verification was counted as a success. `_clean_one()` returned `True`
   after logging `FAIL`, so a file with a preserve violation landed in the
   "succeeded" total — the one line most people read. Each file now ends as
@@ -30,7 +33,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Provide [Verify quantity-with Owner] units.` cleaned to `Provide -units.`
   Separators covered by a redaction are now removed with it. Page and column
   breaks are the exception: they render as `\n` and so can fall inside a match,
-  but they are page setup rather than content, so they are kept and reported.
+  but they are page setup rather than content. A placeholder straddling one is
+  abandoned whole and the reason reported, rather than cut around the break —
+  stranding a page break mid-requirement produced a paragraph no rule could
+  explain, so every such file was reported as needing review for a decision the
+  cleaner made on purpose. Other placeholders in the same paragraph are still cut.
 - A correct long redaction was reported as damage.
   `Provide [Verify quantity with the Owner and the AHJ prior to bid] units.`
   cleans correctly to `Provide units.`, and verification called that an

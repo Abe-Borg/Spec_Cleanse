@@ -281,9 +281,61 @@ class DocxProcessor:
 
         text = paragraph_text(para)
         spans = tidy_spans(text, merge_spans(spans))
+        spans = self._drop_spans_over_layout_breaks(para, spans)
+        if not spans:
+            return None
         if not cut_spans(text, spans).strip():
             return []
         return spans
+
+    def _drop_spans_over_layout_breaks(
+        self, para: etree._Element, spans: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
+        """Abandon any redaction that straddles a page or column break.
+
+        The break renders as ``\n``, which is how it comes to sit inside a
+        placeholder in the first place, but it is page setup rather than
+        content and must survive (see :func:`docx_xml.is_layout_break`).
+
+        Cutting the text around it and leaving it stranded is worse than not
+        cutting at all.  It puts a page break in the middle of a requirement,
+        and it produces a paragraph no rule explains: verification computes the
+        expected text by cutting the whole placeholder, the output does not
+        match it, and the fallback then sees two fragments — the text before
+        the break and the text after — neither of which matches the placeholder
+        pattern on its own.  Every such file would be reported as needing
+        review for a decision the cleaner made deliberately.
+
+        So the placeholder is left where it stands and the reason is recorded.
+        The editorial text survives, which is the lesser cost.
+        """
+        breaks = self._layout_break_offsets(para)
+        if not breaks:
+            return spans
+
+        preview = self._preview(para)
+        kept: list[tuple[int, int]] = []
+        for span in spans:
+            if any(spans_cover([span], start, end) for start, end in breaks):
+                self._warn(
+                    "Left a placeholder in place because a page or column break "
+                    f"sits inside it: \"{preview}\""
+                )
+                continue
+            kept.append(span)
+        return kept
+
+    @staticmethod
+    def _layout_break_offsets(para: etree._Element) -> list[tuple[int, int]]:
+        """Character ranges of this paragraph's page and column breaks."""
+        offsets: list[tuple[int, int]] = []
+        offset = 0
+        for node, text in iter_text_nodes(para):
+            start = offset
+            offset += len(text)
+            if is_layout_break(node):
+                offsets.append((start, offset))
+        return offsets
 
     def _group_run_detections(
         self, para: etree._Element, detections: list[Detection]
@@ -449,14 +501,10 @@ class DocxProcessor:
                 if not spans_cover(spans, start, offset):
                     continue
                 if is_layout_break(node):
-                    # A page or column break renders as "\n" and so can fall
-                    # inside a match, but it is page setup rather than content.
-                    # Cleaning removes content; reflowing the document from
-                    # here is a bigger claim than any pattern makes.
-                    self._warn(
-                        "Kept a page or column break that fell inside removed "
-                        f"text: \"{preview}\""
-                    )
+                    # Unreachable by the ordinary path — a span covering one of
+                    # these is abandoned in _drop_spans_over_layout_breaks
+                    # before any mutation.  Kept as the last line of defence,
+                    # because stranding a page break is not recoverable.
                     continue
                 covered_separators.append(node)
                 run = self._owning_run(node, para)
