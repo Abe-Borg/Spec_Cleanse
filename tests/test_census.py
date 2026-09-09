@@ -12,6 +12,11 @@ from tools.census_formatting import (
     collect_paths,
     format_report,
 )
+from tools.census_references import (
+    census_one as reference_census_one,
+    field_target,
+    format_report as reference_format_report,
+)
 
 from tests import docx_builder as db
 from tests.support import CONFIG_PATH, DocxTestCase
@@ -142,6 +147,161 @@ class PathCollectionTests(DocxTestCase):
         path = self.build(db.document(db.text_para("One.")), name="one.docx")
 
         self.assertEqual(collect_paths([str(path)]), [path])
+
+
+
+
+class FieldInstructionTests(unittest.TestCase):
+    """The reader that says which bookmark a field points at."""
+
+    def test_a_plain_reference(self):
+        self.assertEqual(field_target(" REF Target \\h "), "Target")
+
+    def test_a_quoted_name_may_contain_spaces(self):
+        self.assertEqual(field_target(' REF "Part 1 General" \\h '), "Part 1 General")
+
+    def test_pageref_and_noteref_name_bookmarks_too(self):
+        self.assertEqual(field_target(" PAGEREF _Toc12345 \\h "), "_Toc12345")
+        self.assertEqual(field_target(" NOTEREF _Ref99 \\h "), "_Ref99")
+
+    def test_an_unrelated_field_names_no_bookmark(self):
+        self.assertIsNone(field_target(" PAGE "))
+        self.assertIsNone(field_target(" TOC \\o \"1-3\" "))
+
+    def test_prose_containing_the_word_ref_is_not_a_field(self):
+        # Only instructions are read.  This string would never reach the reader
+        # from visible text, and must not resolve if it somehow did.
+        self.assertIsNone(field_target("Refer to the drawings for REF details"))
+
+    def test_an_empty_instruction_names_nothing(self):
+        self.assertIsNone(field_target(""))
+        self.assertIsNone(field_target(None))
+
+
+REF_FIELD = '<w:fldSimple w:instr=" REF Target \\h "><w:r><w:t>3.2</w:t></w:r></w:fldSimple>'
+
+
+class ReferenceCensusTests(DocxTestCase):
+    """Census B: how much of a clean sits inside a referenced bookmark range."""
+
+    def census(self, document_xml):
+        return reference_census_one(self.build(document_xml), load_config(CONFIG_PATH))
+
+    def test_a_document_with_no_bookmarks_measures_zero_overlap(self):
+        report = self.census(db.document(
+            db.text_para("Provide sprinklers throughout."),
+            db.text_para("[Specifier: delete this note before issue]"),
+        ))
+
+        self.assertIsNone(report.error)
+        self.assertEqual(report.bookmarks, 0)
+        self.assertEqual(report.removable_paragraphs, 1)
+        self.assertEqual(report.removable_inside_referenced_range, 0)
+        self.assertEqual(report.share_inside, 0.0)
+
+    def test_a_removal_inside_a_referenced_range_is_counted(self):
+        note = (db.bookmark_start("1", "Target")
+                + db.run("[Specifier: delete this note before issue]")
+                + db.bookmark_end("1"))
+        report = self.census(db.document(
+            f"<w:p>{note}</w:p>",
+            f'<w:p><w:r><w:t>See </w:t></w:r>{REF_FIELD}</w:p>',
+        ))
+
+        self.assertEqual(report.bookmarks, 1)
+        self.assertEqual(report.referenced_bookmarks, 1)
+        self.assertEqual(report.removable_paragraphs, 1)
+        self.assertEqual(report.removable_inside_referenced_range, 1)
+        self.assertEqual(report.share_inside, 1.0)
+
+    def test_an_unreferenced_bookmark_protects_nothing(self):
+        # Word bookmarks far more than it cross-references.  Counting every
+        # bookmark would be the measurement that makes retention look
+        # impossible when it may not be.
+        note = (db.bookmark_start("1", "Unused")
+                + db.run("[Specifier: delete this note before issue]")
+                + db.bookmark_end("1"))
+        report = self.census(db.document(f"<w:p>{note}</w:p>"))
+
+        self.assertEqual(report.bookmarks, 1)
+        self.assertEqual(report.referenced_bookmarks, 0)
+        self.assertEqual(report.removable_inside_referenced_range, 0)
+
+    def test_an_internal_hyperlink_counts_as_a_consumer(self):
+        note = (db.bookmark_start("1", "target")
+                + db.run("[Specifier: delete this note before issue]")
+                + db.bookmark_end("1"))
+        report = self.census(db.document(
+            f"<w:p>{note}</w:p>",
+            f'<w:p>{db.hyperlink(db.run("jump"), anchor="target")}</w:p>',
+        ))
+
+        self.assertEqual(report.referenced_bookmarks, 1)
+        self.assertEqual(report.removable_inside_referenced_range, 1)
+
+    def test_a_complex_field_split_across_runs_is_read(self):
+        note = (db.bookmark_start("1", "Target")
+                + db.run("[Specifier: delete this note before issue]")
+                + db.bookmark_end("1"))
+        split = (
+            '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            '<w:r><w:instrText xml:space="preserve"> REF </w:instrText></w:r>'
+            '<w:r><w:instrText xml:space="preserve">Target \\h </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            '<w:r><w:t>3.2</w:t></w:r>'
+            '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+        )
+        report = self.census(db.document(f"<w:p>{note}</w:p>", f"<w:p>{split}</w:p>"))
+
+        self.assertEqual(report.referenced_bookmarks, 1)
+        self.assertEqual(report.removable_inside_referenced_range, 1)
+
+    def test_a_range_spanning_several_paragraphs_covers_all_of_them(self):
+        report = self.census(db.document(
+            f'<w:p>{db.bookmark_start("1", "Target")}{db.run("Keep this requirement.")}</w:p>',
+            db.text_para("[Specifier: delete this note before issue]"),
+            f'<w:p>{db.run("Retain subparagraph below for wet-pipe systems.")}{db.bookmark_end("1")}</w:p>',
+            f'<w:p><w:r><w:t>See </w:t></w:r>{REF_FIELD}</w:p>',
+        ))
+
+        self.assertEqual(report.removable_paragraphs, 2)
+        self.assertEqual(report.removable_inside_referenced_range, 2)
+
+    def test_a_removal_outside_the_range_is_not_counted(self):
+        report = self.census(db.document(
+            f'<w:p>{db.bookmark_start("1", "Target")}{db.run("Keep this.")}{db.bookmark_end("1")}</w:p>',
+            db.text_para("[Specifier: delete this note before issue]"),
+            f'<w:p><w:r><w:t>See </w:t></w:r>{REF_FIELD}</w:p>',
+        ))
+
+        self.assertEqual(report.removable_paragraphs, 1)
+        self.assertEqual(report.removable_inside_referenced_range, 0)
+
+    def test_a_half_open_bookmark_covers_nothing(self):
+        # An unterminated range is not evidence about any paragraph.
+        report = self.census(db.document(
+            f'<w:p>{db.bookmark_start("1", "Target")}'
+            f'{db.run("[Specifier: delete this note before issue]")}</w:p>',
+            f'<w:p><w:r><w:t>See </w:t></w:r>{REF_FIELD}</w:p>',
+        ))
+
+        self.assertEqual(report.removable_inside_referenced_range, 0)
+
+    def test_an_unreadable_file_is_recorded_not_raised(self):
+        broken = self.temp_dir / "broken.docx"
+        broken.write_bytes(b"not a zip")
+
+        report = reference_census_one(broken, load_config(CONFIG_PATH))
+
+        self.assertIsNotNone(report.error)
+
+    def test_the_report_says_when_nothing_was_referenced(self):
+        report = self.census(db.document(
+            db.text_para("[Specifier: delete this note before issue]"),
+        ))
+
+        self.assertIn("retention would suppress nothing here",
+                      reference_format_report([report]))
 
 
 if __name__ == "__main__":
