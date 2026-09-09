@@ -48,7 +48,7 @@ from docx_xml import (
     note_identity,
     numbering_id,
     paragraph_signature,
-    referenced_names,
+    reference_consumers,
     run_profile,
     run_text,
     load_config,
@@ -246,13 +246,18 @@ class StructureReport:
     #: header legitimately names a bookmark in the body — the opposite of the
     #: field inventory above, and for the opposite reason.
     bookmarks: set = field(default_factory=set)
-    #: Case-folded name -> the name as written, so a report names what someone
-    #: would search the document for rather than the key it was matched on.
-    references: dict = field(default_factory=dict)
+    #: ``(part, consumer)`` for everything that points at a bookmark.  Kept per
+    #: consumer rather than collapsed by target name: one missing bookmark can
+    #: break references in the body, a header and a note at once, and each is a
+    #: separate place someone has to go and repair.
+    references: list = field(default_factory=list)
 
     def broken_references(self) -> set:
-        """Names something points at that no bookmark defines."""
-        return set(self.references) - self.bookmarks
+        """Folded names something points at that no bookmark defines."""
+        return {
+            consumer.folded for _, consumer in self.references
+            if consumer.folded not in self.bookmarks
+        }
 
 
 @dataclass
@@ -463,8 +468,8 @@ def inspect_structure(docx_path: Path, strip_revisions: bool = False) -> Structu
                 report.fields[(part, instruction)] += count
 
             report.bookmarks |= bookmark_names(root)
-            for folded, written in referenced_names(root).items():
-                report.references.setdefault(folded, written)
+            report.references.extend(
+                (part, consumer) for consumer in reference_consumers(root))
 
         return report
     finally:
@@ -512,11 +517,12 @@ def _compare_structure(
     # inventory.  Accepting a revision that deletes a referenced target is a
     # requested text deletion with an unrequested consequence, and the
     # consequence is what needs review.
-    for name in sorted(before.broken_references() ^ after.broken_references()):
-        if name in after.broken_references() and name in before.bookmarks:
+    newly_broken = after.broken_references() - before.broken_references()
+    for part, consumer in after.references:
+        if consumer.folded in newly_broken and consumer.folded in before.bookmarks:
             violations.append(StructuralViolation(
-                "reference broken — no bookmark named "
-                f"{{{after.references.get(name, name)}}}"
+                f"{part}: reference broken — {consumer} names {{{consumer.name}}}, "
+                "which no bookmark defines"
             ))
 
     # A field carrier can vanish while the text stays identical — the cached

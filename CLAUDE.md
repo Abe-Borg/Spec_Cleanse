@@ -461,6 +461,12 @@ reason: a reference in a header legitimately names a bookmark in the body, while
 lost from a header is not answered by an identical one in the body. Names match
 case-insensitively, as Word matches them, and are reported as written.
 
+References are kept **per consumer**, not collapsed by target name. One missing bookmark
+can break references in the body, a header and a note at once, and each is a separate
+place someone has to go and repair — a report naming only the bookmark says what is wrong
+without saying where. Each surviving consumer is reported with its part and with the
+instruction or anchor that names the target.
+
 Only what this run broke is reported, and there is deliberately **no tracked-deletion
 exemption** — unlike the field inventory. Accepting a revision that deletes a referenced
 target is a requested deletion with an unrequested consequence, and the consequence is

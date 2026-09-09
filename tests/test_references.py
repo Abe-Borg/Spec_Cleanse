@@ -143,6 +143,37 @@ class BrokenByTheClean(DocxTestCase):
         self.assertBroken(result, "TargetA")
 
 
+class ReportsNameTheConsumer(DocxTestCase):
+    """A name alone says what is wrong without saying where.
+
+    One missing bookmark can break references in the body, a header and a note
+    at once, and each is a separate place someone has to go and repair.
+    Collapsing them by target name hides two of the three.
+    """
+
+    def test_every_surviving_consumer_is_reported_with_its_part(self):
+        engine = self.make_engine()
+        source = self.build(
+            db.document(bookmarked("TargetA", db.run(NOTE)),
+                        simple_ref("TargetA"),
+                        db.para(db.hyperlink(db.run("jump"), anchor="TargetA"))),
+            {"word/header1.xml": db.header(simple_ref("TargetA"))},
+            name="ref_consumers.docx")
+        cleaned = self.temp_dir / "ref_consumers_out.docx"
+        self.assertEqual(DocxProcessor(engine).process(source, cleaned).errors, [])
+
+        reported = [
+            str(v) for v in verify_clean(source, cleaned, engine=engine).structural
+            if "reference broken" in str(v)
+        ]
+
+        self.assertEqual(len(reported), 3, reported)
+        self.assertTrue(any("header1.xml" in line for line in reported), reported)
+        self.assertTrue(any("hyperlink" in line for line in reported), reported)
+        self.assertTrue(
+            any("field" in line and "REF TargetA" in line for line in reported), reported)
+
+
 class NotTheCleansFault(DocxTestCase):
     """The false-alarm guards: silence unless this run broke something."""
 

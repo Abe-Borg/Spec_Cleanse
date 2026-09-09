@@ -85,6 +85,30 @@ class NumberingNotices(DocxTestCase):
 
         self.assertEqual(result.numbering, [])
 
+    def test_numbering_from_the_implicit_default_style_counts(self):
+        """A paragraph naming no style still has one.
+
+        Word applies the default paragraph style, so a chain that started at
+        None examined nothing and a default style carrying ``w:numPr`` was
+        invisible.
+        """
+        engine = self.make_engine()
+        default_styles = db.styles(
+            '<w:style w:type="paragraph" w:default="1" w:styleId="Normal">'
+            '<w:name w:val="Normal"/><w:pPr><w:numPr><w:ilvl w:val="0"/>'
+            '<w:numId w:val="5"/></w:numPr></w:pPr></w:style>')
+        source = self.build(
+            db.document(db.text_para(NOTE), db.text_para("Requirement."),
+                        db.text_para("Anchor.")),
+            {"word/styles.xml": default_styles}, name="num_default.docx")
+        cleaned = self.temp_dir / "num_default_out.docx"
+        self.assertEqual(DocxProcessor(engine).process(source, cleaned).errors, [])
+
+        result = verify_clean(source, cleaned, engine=engine)
+
+        self.assertEqual(len(result.numbering), 1, result.numbering)
+        self.assertIn("5", str(result.numbering[0]))
+
     def test_a_list_with_no_survivors_renumbers_nothing(self):
         """A notice here would be noise dressed as precision."""
         result = self.clean_and_verify(

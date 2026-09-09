@@ -314,27 +314,46 @@ def bookmark_names(scope: etree._Element) -> set[str]:
     }
 
 
-def referenced_names(scope: etree._Element) -> dict[str, str]:
-    """Bookmark names something in ``scope`` still points at.
+@dataclass(frozen=True)
+class ReferenceConsumer:
+    """Something that points at a bookmark, and enough to find it again.
 
-    Keyed by the case-folded name, because Word matches bookmarks that way, and
-    valued by the name as written, because that is what someone has to search
-    the document for.
-
-    Two kinds of consumer are supported: a reference field, simple or complex,
-    and an internal hyperlink, which names its target in ``w:anchor`` rather
-    than through a field at all.
+    The name alone is not enough to act on.  A target referenced from the body,
+    a header and a footnote breaks in three places, and someone repairing it has
+    to be told all three — collapsing them into one message by target name says
+    what is wrong without saying where.
     """
-    found: dict[str, str] = {}
-    for instruction in field_instructions(scope):
-        target = reference_target(instruction)
-        if target:
-            found.setdefault(target.casefold(), target)
-    for link in scope.iter(f"{W}hyperlink"):
-        anchor = link.get(f"{W}anchor")
-        if anchor:
-            found.setdefault(anchor.casefold(), anchor)
-    return found
+    name: str
+    kind: str
+    detail: str
+
+    @property
+    def folded(self) -> str:
+        return self.name.casefold()
+
+    def __str__(self) -> str:
+        return f"{self.kind} {self.detail}"
+
+
+def reference_consumers(scope: etree._Element) -> list[ReferenceConsumer]:
+    """Everything in ``scope`` that still points at a bookmark.
+
+    Two kinds are supported: a reference field, simple or complex, and an
+    internal hyperlink, which names its target in ``w:anchor`` rather than
+    through a field at all.  Names are kept as written — matching folds case,
+    as Word does, but a report has to name what someone will search for.
+    """
+    consumers = [
+        ReferenceConsumer(target, "field", instruction.strip())
+        for instruction in field_instructions(scope)
+        if (target := reference_target(instruction))
+    ]
+    consumers.extend(
+        ReferenceConsumer(anchor, "hyperlink to", anchor)
+        for link in scope.iter(f"{W}hyperlink")
+        if (anchor := link.get(f"{W}anchor"))
+    )
+    return consumers
 
 
 def in_tracked_deletion(node: etree._Element) -> bool:
@@ -769,6 +788,11 @@ def _accept_structural_deletions(root: etree._Element) -> int:
     accepting the deletion.  Cells work the same way through ``w:cellDel``.
     """
     changed = 0
+    #: Tables a row or cell was actually removed from.  A pre-existing rowless
+    #: table is not this run's doing, and rewriting the document because the
+    #: revision checkbox happened to be on -- in a document with no revisions at
+    #: all -- would change it for a reason unrelated to what was asked.
+    touched: list[etree._Element] = []
 
     for marker_tag, properties_tag, container_tag in (
         (f"{W}del", f"{W}trPr", f"{W}tr"),
@@ -782,24 +806,42 @@ def _accept_structural_deletions(root: etree._Element) -> int:
             if container is None or container.tag != container_tag:
                 continue
             row = container.getparent() if container_tag == TC_TAG else None
+            table = _enclosing_table(container)
             if container.getparent() is not None:
                 container.getparent().remove(container)
                 changed += 1
+                if table is not None:
+                    touched.append(table)
             # A row emptied of every cell is no longer a row.
             if row is not None and row.getparent() is not None:
                 if not any(child.tag == TC_TAG for child in row):
                     row.getparent().remove(row)
 
-    return changed + _remove_rowless_tables(root)
+    return changed + _remove_rowless_tables(touched)
 
 
-def _remove_rowless_tables(root: etree._Element) -> int:
+def _enclosing_table(node: etree._Element) -> etree._Element | None:
+    """The nearest ``w:tbl`` ancestor of ``node``, if any."""
+    while node is not None:
+        if node.tag == TBL_TAG:
+            return node
+        node = node.getparent()
+    return None
+
+
+def _remove_rowless_tables(candidates: list[etree._Element]) -> int:
     """Remove tables that accepting revisions left with no rows.
 
     Deleting a table's last row already worked; the ``w:tbl`` around it stayed,
     holding nothing.  Word does not accept a table with no rows, and neither
     lint nor verification could see one — so the package looked clean and the
     file did not open.
+
+    Only tables this acceptance actually took a row or cell from are considered.
+    A table that arrived already rowless is the document's own problem, and
+    removing it would rewrite a file that had no revisions to accept — the same
+    rule the structural comparison follows, that only what this run did is this
+    run's doing.
 
     Nesting needs no special traversal here: a table with no rows has no cells,
     so it can hold no inner table.  It is always a leaf, and the rows above were
@@ -810,10 +852,13 @@ def _remove_rowless_tables(root: etree._Element) -> int:
     requires, not a repair of the table.
     """
     changed = 0
-    for table in [
-        element for element in root.iter(TBL_TAG)
-        if not any(child.tag == f"{W}tr" for child in element)
-    ]:
+    seen: set[int] = set()
+    for table in candidates:
+        if id(table) in seen:
+            continue
+        seen.add(id(table))
+        if any(child.tag == f"{W}tr" for child in table):
+            continue
         parent = table.getparent()
         if parent is None:
             continue
@@ -962,6 +1007,8 @@ class StyleInfo:
     based_on: str | None = None
     vanish: bool | None = None
     style_type: str = ""
+    #: ``w:default="1"`` — the style Word applies where none is named.
+    default: bool = False
     #: ``w:pPr/w:numPr/w:numId/@w:val`` if the style declares one.  Three-valued
     #: like ``vanish``: a value, the string ``"0"`` meaning *no* numbering, or
     #: None for silence.  ``"0"`` is an override, not a list called zero.
@@ -1001,6 +1048,8 @@ def load_styles(word_dir: Path) -> dict[str, StyleInfo]:
             based_on=(based_on_elem.get(f"{W}val") if based_on_elem is not None else None),
             vanish=is_on(vanish_elem) if vanish_elem is not None else None,
             style_type=style.get(f"{W}type") or "",
+            default=(style.get(f"{W}default") or "").strip().lower()
+            in ("1", "true", "on"),
             num_id=(num_id_elem.get(f"{W}val") if num_id_elem is not None else None),
         )
 
@@ -1025,7 +1074,11 @@ def numbering_id(para: etree._Element, styles: "StyleIndex") -> str | None:
             value = direct.get(f"{W}val")
             return None if value in (None, "0") else value
 
-    for info in styles.chain(paragraph_style(para)):
+    # A paragraph naming no style still has one: Word applies the default
+    # paragraph style, so a chain that started at None examined nothing and a
+    # default style carrying w:numPr was invisible.
+    style = paragraph_style(para) or styles.default_paragraph_style()
+    for info in styles.chain(style):
         if info.num_id is not None:
             return None if info.num_id == "0" else info.num_id
     return None
@@ -1054,6 +1107,13 @@ class StyleIndex:
 
     def __init__(self, styles: dict[str, StyleInfo] | None = None):
         self.styles = styles or {}
+
+    def default_paragraph_style(self) -> str | None:
+        """The style Word applies to a paragraph that names none."""
+        for info in self.styles.values():
+            if info.default and info.style_type == "paragraph":
+                return info.style_id
+        return None
 
     def chain(self, style_id: str | None) -> list[StyleInfo]:
         """The style and everything it is based on, nearest first."""

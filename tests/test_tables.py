@@ -143,6 +143,52 @@ class EmptiedTables(DocxTestCase):
         self.assertSound(cleaned, result)
 
 
+class OnlyWhatThisRunEmptied(DocxTestCase):
+    """A table that arrived rowless is the document's own problem.
+
+    Removing it would rewrite a file that had no revisions to accept, merely
+    because the option was on — a change for a reason unrelated to what the run
+    was asked to do.  It is still linted, so it is visible without being
+    silently repaired.
+    """
+
+    ROWLESS = '<w:tbl><w:tblPr><w:tblStyle w:val="Grid"/></w:tblPr></w:tbl>'
+
+    def accept(self, doc_xml, name):
+        engine = self.make_engine()
+        source = self.build(doc_xml, name=f"{name}.docx")
+        cleaned = self.temp_dir / f"{name}_out.docx"
+        self.assertEqual(
+            DocxProcessor(engine, strip_revisions=True).process(source, cleaned).errors, [])
+        return cleaned
+
+    def test_a_pre_existing_rowless_table_is_left_alone(self):
+        cleaned = self.accept(db.document(
+            db.text_para("Body."), self.ROWLESS, db.text_para("After.")), "prerowless")
+
+        self.assertEqual(self.count_tags(cleaned, "tbl"), 1)
+
+    def test_it_is_still_left_alone_beside_a_table_this_run_empties(self):
+        """Only the one whose row actually went is removed."""
+        cleaned = self.accept(db.document(
+            db.text_para("Body."), self.ROWLESS,
+            db.table_of(db.deleted_row(db.text_para("Only row."))),
+            db.text_para("After.")), "prerowless_mixed")
+
+        self.assertEqual(self.count_tags(cleaned, "tbl"), 1)
+        self.assertTrue(any("no rows" in issue for issue in lint_structure(cleaned)),
+                        "the surviving one is the pre-existing rowless table")
+
+    def test_a_pre_existing_rowless_table_is_not_blamed_on_the_clean(self):
+        """Present on both sides, so the comparison stays silent about it."""
+        engine = self.make_engine()
+        doc = db.document(db.text_para("Body."), self.ROWLESS, db.text_para("After."))
+        source = self.build(doc, name="prerowless_v.docx")
+        cleaned = self.accept(doc, "prerowless_v2")
+
+        self.assertEqual(verify_clean(source, cleaned, engine=engine).structural, [])
+
+
 class EmptyStructureIsVisible(DocxTestCase):
     """The lint had no rule for these shapes, so it reported nothing."""
 
