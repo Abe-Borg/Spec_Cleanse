@@ -42,16 +42,46 @@ copyright_notices:
   enabled: true
   description: "Boilerplate copyright text"
 
+  # A single match here scores 0.7, which clears the 0.5 removal threshold on
+  # its own — so every pattern below has to be sufficient by itself.  Three
+  # earlier ones were not, and each deleted a real requirement:
+  #
+  #   'may not be reproduced'  took "Shop Drawings submitted under this Section
+  #                            may not be reproduced for use on other projects."
+  #   'duplication.*?prohibited'
+  #                            took "...duplication of sprinkler coverage in
+  #                            adjacent zones is prohibited by the AHJ."
+  #   'unauthorized.*?reproduction'
+  #                            took "Unauthorized personnel shall not have access
+  #                            to the fire pump room; reproduction of access keys
+  #                            is not permitted."
+  #
+  # Reproduction and duplication language is ordinary specification prose.  What
+  # marks a copyright notice is either an unambiguous marker (©, "copyright",
+  # "all rights reserved") or the boilerplate clause a notice actually uses —
+  # "in whole or in part", "without written permission" — which a requirement
+  # does not.  The narrowed forms below say that, and the bounded gaps keep the
+  # words next to each other instead of anywhere in the paragraph.
   text_patterns:
     - '©\s*\d{4}'                       # © 2026 — not a bare © (e.g. "Excel© file")
     - 'copyright\s*©'
     - 'copyright\s+\d{4}'
     - 'all\s+rights\s+reserved'
-    - 'may\s+not\s+be\s+reproduced'
     - 'licensed\s+for\s+use\s+by'
-    - 'duplication.*?prohibited'
-    - 'unauthorized.*?reproduction'
     - 'exclusively\s+published\s+and\s+distributed'   # ARCOM distribution notice
+
+    # "...may not be reproduced in whole or in part" / "...without written
+    # permission".  A shop drawing that may not be reproduced *for use on other
+    # projects* is a requirement and keeps its text.
+    - 'may\s+not\s+be\s+reproduced\s+(?:in\s+(?:whole|part)|without\s+(?:the\s+)?(?:prior\s+)?written)'
+
+    # "Unauthorized reproduction", "unauthorized duplication" — adjacent, not
+    # the two words somewhere in the same sentence.
+    - 'unauthorized\s+(?:\w+\s+){0,2}(?:reproduction|duplication)'
+
+    # "Duplication is prohibited", "Duplication or distribution is strictly
+    # prohibited" — again adjacent.
+    - 'duplication\s+(?:\w+\s+){0,2}is\s+(?:strictly\s+)?prohibited'
 
 hidden_text:
   enabled: true
@@ -63,7 +93,9 @@ specagent_references:
   description: "SpecAgent.com watermarks and references"
   
   text_patterns:
-    - 'spec\s*agent'                    # covers specagent.com, www.specagent, etc.
+    # Bounded so it matches the watermark and the domain but cannot fire inside
+    # a longer word.  This detector scores 1.0, so it needs to be exact.
+    - '\bspec\s*agent\b'               # covers specagent.com, www.specagent, etc.
 
 editorial_artifacts:
   enabled: true
@@ -100,12 +132,25 @@ editorial_artifacts:
 
   # High-confidence patterns — safe to remove the whole paragraph on text match.
   text_patterns:
-    # Retain/delete instructions
-    - 'retain\s+or\s+delete'
+    # Retain/delete instructions.  'retain or delete' is anchored to the start
+    # of the paragraph, optionally inside a bracket, so it fires when the
+    # paragraph *is* the instruction and not when a requirement merely contains
+    # the marker: "Provide two [retain or delete] spare filters per unit." keeps
+    # its text, brackets and all.  Cutting the marker out would need an inline
+    # rule, and inventing one broad enough to catch it would put every bracketed
+    # phrase in a requirement at risk.
+    - '^\s*\[?\s*retain\s+or\s+delete\b'
     - 'delete\s+if\s+not\s+(applicable|required|used)'
     - 'retain\s+if\s+(applicable|required|used)'
-    - '^\s*(?:select|choose)\s+one\b(?!-)'   # anchored; not "Select one-piece fittings"
     - 'delete\s+options?\s+not\s+(applicable|required|selected)'
+
+    # "Select one of the following paragraphs" is an instruction to a specifier;
+    # "Select one of the listed manufacturers" is an instruction to a
+    # contractor, and the two are indistinguishable from the opening words
+    # alone.  What separates them is what is being selected *from*: an editorial
+    # note points at the document's own structure.  Requiring that referent
+    # keeps the requirement; the (?!-) still rules out "Select one-piece".
+    - '^\s*(?:select|choose)\s+one\b(?!-)[^.]{0,40}\b(?:above|below|following|paragraphs?|subparagraphs?|options?|articles?)\b'
 
     # Common editing instructions
     - 'delete\s+this\s+(paragraph|section|line)'

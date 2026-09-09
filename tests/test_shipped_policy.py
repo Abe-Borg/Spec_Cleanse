@@ -4,10 +4,11 @@ The corpus in section 8.2 of the implementation plan, pinned as tests. Two
 jobs:
 
 *Negatives* are plausible requirement text that must survive a clean. Five of
-them do not today — they are the reproduced F01 and F02 false positives — and
-are carried under ``unittest.expectedFailure`` until W02 narrows the rules.
-The suite stays green while they stand and turns red the moment one starts
-surviving, which is the signal to drop its decorator.
+them did not before W02 — they were the reproduced F01 and F02 false positives
+— and were carried under ``unittest.expectedFailure`` until the rules were
+narrowed. Narrowing them turned the suite red with five unexpected successes,
+which was the signal to drop the decorators; they are ordinary passing tests
+now, and they are the regression guard against the old breadth coming back.
 
 *Positives* are unambiguous editorial content that must keep being cleaned.
 They all pass today, and they exist to catch W02 narrowing the rules too far.
@@ -23,10 +24,6 @@ import unittest
 
 from tests import docx_builder as db
 from tests.support import DocxTestCase
-
-
-#: Closes the five expected failures below.
-NARROWING_PACKAGE = "W02"
 
 
 class ShippedPolicyTestCase(DocxTestCase):
@@ -53,30 +50,41 @@ class ShippedPolicyTestCase(DocxTestCase):
 class CopyrightNegatives(ShippedPolicyTestCase):
     """Requirement prose that the copyright rules currently claim.
 
-    Each of these matches one unanchored phrase, and `CopyrightDetector`
-    scores a single match at 0.7 — over the 0.5 threshold on its own. Removing
-    the global DOTALL flag fixes none of them: all three match on one line.
+    Each matched one unanchored phrase, and `CopyrightDetector` scores a
+    single match at 0.7 — over the 0.5 threshold on its own. Removing the
+    global DOTALL flag would have fixed none of them: all three match on one
+    line. W02 narrowed the phrases instead.
     """
 
-    @unittest.expectedFailure
     def test_shop_drawings_reproduction_clause(self):
-        """EXPECTED TO FAIL until W02 — matches `may\\s+not\\s+be\\s+reproduced`."""
+        """Was taken by the unbounded `may not be reproduced`.
+
+        The narrowed rule requires the clause a notice actually uses — "in
+        whole or in part", "without written permission" — which this has not.
+        """
         self.assertSurvives(
             "Shop Drawings submitted under this Section may not be reproduced "
             "for use on other projects."
         )
 
-    @unittest.expectedFailure
     def test_duplicate_sprinkler_coverage_clause(self):
-        """EXPECTED TO FAIL until W02 — matches `duplication.*?prohibited`."""
+        """Was taken by `duplication.*?prohibited` matching across the sentence.
+
+        Four words separate "duplication" from "is prohibited" here; the
+        narrowed rule allows at most two, so the words have to be adjacent the
+        way they are in a notice.
+        """
         self.assertSurvives(
             "Contractor shall verify that duplication of sprinkler coverage in "
             "adjacent zones is prohibited by the AHJ."
         )
 
-    @unittest.expectedFailure
     def test_fire_pump_room_access_clause(self):
-        """EXPECTED TO FAIL until W02 — matches `unauthorized.*?reproduction`."""
+        """Was taken by `unauthorized.*?reproduction` spanning a semicolon.
+
+        "Unauthorized" opens one clause and "reproduction" opens another. The
+        narrowed rule requires them adjacent.
+        """
         self.assertSurvives(
             "Unauthorized personnel shall not have access to the fire pump "
             "room; reproduction of access keys is not permitted."
@@ -86,24 +94,26 @@ class CopyrightNegatives(ShippedPolicyTestCase):
 class EditorialOverreachNegatives(ShippedPolicyTestCase):
     """Requirement prose that the high-confidence editorial tier currently claims."""
 
-    @unittest.expectedFailure
     def test_selection_instruction_to_the_contractor(self):
-        """EXPECTED TO FAIL until W02 — matches `^\\s*(?:select|choose)\\s+one\\b`.
+        """Was taken by the bare `^select one` anchor.
 
-        Ambiguous: it reads as an instruction to a specifier and as a
-        requirement on a contractor. The plan retains it by default; retaining
-        editorial noise is cheaper than deleting a requirement.
+        The opening words are genuinely ambiguous — a specifier and a
+        contractor are told to select one of something in the same voice. What
+        separates them is the referent: an editorial note points at the
+        document's own structure ("of the following paragraphs", "below"), and
+        this points at manufacturers. The narrowed rule requires that referent.
         """
         self.assertSurvives("Select one of the listed manufacturers.")
 
-    @unittest.expectedFailure
     def test_requirement_containing_a_bracketed_editorial_marker(self):
-        """EXPECTED TO FAIL until W02 — `retain\\s+or\\s+delete` takes the paragraph.
+        """Was taken by an unanchored `retain or delete` inside a requirement.
 
-        A whole-paragraph rule fires on a marker embedded in a requirement, so
-        the requirement goes with it. The selected behaviour is to retain the
-        paragraph complete, brackets and all, rather than invent an inline rule
-        to cut them: the marker reaching downstream analysis is the lesser cost.
+        The rule is now anchored to the start of the paragraph, so it fires
+        when the paragraph *is* the instruction rather than when a requirement
+        contains the marker. The paragraph is retained complete, brackets and
+        all: cutting the marker would need an inline rule, and one broad enough
+        to catch it would put every bracketed phrase in a requirement at risk.
+        The marker reaching downstream analysis is the lesser cost.
         """
         self.assertSurvives("Provide two [retain or delete] spare filters per unit.")
 
