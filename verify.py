@@ -551,12 +551,23 @@ def _compare_location(
     """
     input_texts = [p.text for p in input_paras]
     output_texts = [p.text for p in output_paras]
-    lost = _lost_signatures(input_paras, output_paras)
-    attributed: set[int] = set()
+
+    # Pairing first, classification second.  Attribution must know every
+    # established pairing before it runs: a paragraph that survived in
+    # shortened form is not missing, and offering it as the explanation for
+    # some *other* paragraph's loss counts it twice and leaves the real loss
+    # unclassified — a deleted requirement reported as a verified clean.
+    removals: list[int] = []
+    modifications: list[tuple[int, int, list[tuple[int, int]]]] = []
+    survived: set[int] = set()
 
     matcher = difflib.SequenceMatcher(None, input_texts, output_texts, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
+            # Deliberately not reserved.  Inside an equal block the differ has
+            # matched on text, which for repeated text says nothing about which
+            # paragraph is which — reserving on that alignment would hand a
+            # correct clean's survivor the identity of the copy that went.
             continue
         if tag == "insert":
             result.added.extend(output_texts[j1:j2])
@@ -564,26 +575,34 @@ def _compare_location(
 
         paired: set[int] = set()
         for idx in range(i1, i2):
-            info = input_paras[idx]
-            match = _pair_with_survivor(info, output_paras, j1, j2, paired)
+            match = _pair_with_survivor(input_paras[idx], output_paras, j1, j2, paired)
 
             if match is None:
-                info = _attribute_removal(info, input_paras, lost, attributed)
-                result.removed.append(_classify_removal(info, strip_revisions))
+                removals.append(idx)
                 continue
 
             jdx, intervals = match
             paired.add(jdx)
+            survived.add(idx)
             if intervals:
-                result.modified.append(
-                    _classify_modification(info, output_paras[jdx], intervals)
-                )
+                modifications.append((idx, jdx, intervals))
 
         # Anything in the replacement block that no input paragraph explains
         # is text the clean invented.
         result.added.extend(
             output_texts[jdx] for jdx in range(j1, j2) if jdx not in paired
         )
+
+    for idx, jdx, intervals in modifications:
+        result.modified.append(
+            _classify_modification(input_paras[idx], output_paras[jdx], intervals)
+        )
+
+    lost = _lost_signatures(input_paras, output_paras)
+    attributed = set(survived)
+    for idx in removals:
+        info = _attribute_removal(input_paras[idx], input_paras, lost, attributed)
+        result.removed.append(_classify_removal(info, strip_revisions))
 
 
 def _lost_signatures(
@@ -639,7 +658,7 @@ def _attribute_removal(
 
     for index, para in same_text:
         if index in attributed:
-            continue
+            continue  # already paired with a survivor, or already blamed
         if remaining.get(para.signature, 0) > 0:
             remaining[para.signature] -= 1
             attributed.add(index)

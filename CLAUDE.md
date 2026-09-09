@@ -250,6 +250,14 @@ paragraph signatures between the two sides, and `_attribute_removal()` judges th
 paragraph the output is genuinely missing rather than whichever index the alignment
 left over. It only ever re-attributes among paragraphs whose text is already identical.
 
+Pairing is settled before any attribution. A paragraph that survives in shortened
+form is paired, but its original text is gone from the output, so it also looks
+*missing* — and offering it as the explanation for another paragraph's loss counts it
+twice and leaves the real loss unclassified, which reported a deleted requirement as a
+verified clean. Paragraphs matched inside an unchanged block are deliberately not
+reserved: there the differ matched on text alone, which for repeated text says nothing
+about which paragraph is which.
+
 Two signatures are needed because they answer different questions:
 
 | | Contents | Answers |

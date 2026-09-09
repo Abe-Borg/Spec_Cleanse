@@ -318,6 +318,31 @@ class DuplicateTextAttribution(DocxTestCase):
         self.assertEqual(len(result.unexpected_removals), 1, result.removed)
         self.assertFalse(result.passed)
 
+    def test_a_shortened_survivor_cannot_also_explain_a_removal(self):
+        """A paragraph counted twice hid a deleted requirement entirely.
+
+        The hidden note survives in shortened form, so it is *paired* — but its
+        original text no longer appears anywhere, which made it look missing to
+        the signature difference as well.  The plain requirement's removal was
+        then attributed to it, classified as an authorized hidden-text removal,
+        and the whole run reported as verified while a requirement had gone.
+
+        Attribution therefore runs only once every established pairing is known,
+        and a paragraph that survived is never offered as the explanation for
+        another's loss.
+        """
+        result = self.build_pair(
+            db.document(db.para(db.run(NOTE, vanish=True)), db.text_para(NOTE),
+                        db.text_para("Anchor.")),
+            db.document(db.para(db.run("Delete before.", vanish=True)),
+                        db.text_para("Anchor.")),
+            "double_count",
+        )
+
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+        self.assertEqual(len(result.expected_modifications), 1, result.modified)
+        self.assertFalse(result.passed)
+
     def test_duplicate_unchanged_paragraphs_keep_their_multiplicity(self):
         result = self.build_pair(
             db.document(db.text_para(REQ), db.text_para("Between."), db.text_para(REQ)),

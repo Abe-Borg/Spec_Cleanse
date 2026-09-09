@@ -55,6 +55,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `word/glossary/document.xml` are now distinct, and one footnote can no longer
   account for another.
 
+- Attribution runs only once every established pairing is known. A paragraph
+  that survives in shortened form is paired, but its original text no longer
+  appears anywhere, which also made it look missing — so another paragraph's
+  removal could be attributed to it, counting it twice and leaving a genuinely
+  deleted requirement unclassified. The run was reported as verified. Paragraphs
+  matched inside an unchanged block are deliberately *not* reserved, because
+  there the differ matched on text alone, which for repeated text says nothing
+  about which paragraph is which.
+
 - Which of several identical paragraphs disappeared is decided by evidence rather
   than by the difference algorithm's alignment. Removing a hidden note beside an
   identical plain requirement was blamed on the plain one, reporting a correct
