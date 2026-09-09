@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from batch import FileOutcome
+from batch import FileOutcome, ReviewCategory
 from tests import docx_builder as db
 from tests.support import DocxTestCase
 
@@ -70,7 +70,9 @@ class WorkerTests(DocxTestCase):
 
         outcome = gui._clean_one(path, out, self.make_engine(), self.log)
 
-        self.assertIs(outcome, FileOutcome.VERIFIED)
+        self.assertIs(outcome.outcome, FileOutcome.VERIFIED)
+        self.assertEqual(outcome.categories, frozenset())
+        self.assertTrue(outcome.output_written)
         self.assertIn("PASS", self.output)
         self.assertIn("Paragraphs modified: 1", self.output)
         self.assertTrue(out.exists())
@@ -82,7 +84,8 @@ class WorkerTests(DocxTestCase):
             self.temp_dir / "nope.docx", out, self.make_engine(), self.log
         )
 
-        self.assertIs(outcome, FileOutcome.FAILED)
+        self.assertIs(outcome.outcome, FileOutcome.FAILED)
+        self.assertFalse(outcome.output_written)
         self.assertIn("ERROR", self.output)
 
     def test_a_failed_verification_is_not_a_success(self):
@@ -97,8 +100,12 @@ class WorkerTests(DocxTestCase):
         with patch.object(gui, "verify_clean", return_value=failing):
             outcome = gui._clean_one(path, out, self.make_engine(), self.log)
 
-        self.assertIs(outcome, FileOutcome.NEEDS_REVIEW)
-        self.assertIn("NEEDS REVIEW", self.output)
+        self.assertIs(outcome.outcome, FileOutcome.NEEDS_REVIEW)
+        # The verdict has to say which of the four kinds of concern this is:
+        # reading the document, fixing the configuration and checking a
+        # cross-reference are three different jobs.
+        self.assertEqual(outcome.categories, frozenset({ReviewCategory.DETECTED_DAMAGE}))
+        self.assertIn("NEEDS REVIEW (1 detected damage)", self.output)
         self.assertIn(str(out), self.output)
         self.assertTrue(out.exists())
 
@@ -109,7 +116,10 @@ class WorkerTests(DocxTestCase):
         with patch.object(gui, "verify_clean", side_effect=RuntimeError("boom")):
             outcome = gui._clean_one(path, out, self.make_engine(), self.log)
 
-        self.assertIs(outcome, FileOutcome.FAILED)
+        self.assertIs(outcome.outcome, FileOutcome.FAILED)
+        # Failed, and yet a file exists.  The tally needs that as a fact, not
+        # only as a line in the log a reader may not scroll back to.
+        self.assertTrue(outcome.output_written)
         self.assertIn("UNVERIFIED", self.output)
         self.assertIn(str(out), self.output)
         self.assertTrue(out.exists())

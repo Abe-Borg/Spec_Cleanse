@@ -14,6 +14,7 @@ source.
 """
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -337,3 +338,99 @@ def plan_batch(files: list[Path], output_dir: Path | None = None) -> BatchPlan:
             item.destination for item in items if item.destination.exists()
         ]
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Running a validated plan
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FileReport:
+    """What became of one file, and why.
+
+    The outcome alone cannot be acted on.  "Needs review" says a file is not
+    ready to hand on; it does not say whether to go and read the document, fix
+    the configuration, or check a cross-reference — three different pieces of
+    work.  ``categories`` is what makes the verdict actionable, and it is a
+    set because a file can genuinely be in more than one.
+
+    ``output_written`` is separate from the outcome because a failure can
+    still leave a file on disk: verification raising after a successful write
+    is exactly that case, and §14.1 requires the disposition stated rather
+    than left for the reader to guess.
+    """
+
+    outcome: FileOutcome
+    categories: frozenset[ReviewCategory] = frozenset()
+    output_written: bool = False
+
+
+@dataclass
+class RunTally:
+    """Running counts for a batch, and the line that describes it."""
+
+    counts: dict[FileOutcome, int] = field(default_factory=dict)
+    categories: dict[ReviewCategory, int] = field(default_factory=dict)
+    #: Files that failed but left something on disk anyway.
+    unverified_outputs: int = 0
+
+    def add(self, report: FileReport) -> None:
+        self.counts[report.outcome] = self.counts.get(report.outcome, 0) + 1
+        for category in report.categories:
+            self.categories[category] = self.categories.get(category, 0) + 1
+        if report.outcome is FileOutcome.FAILED and report.output_written:
+            self.unverified_outputs += 1
+
+    def summary(self) -> str:
+        return summarise(self.counts, self.categories, self.unverified_outputs)
+
+
+def run_batch(
+    items: list[BatchItem],
+    clean: Callable[[BatchItem], FileReport],
+    log: Callable[[str], None],
+    announce: Callable[[int, int, BatchItem], None] | None = None,
+) -> RunTally:
+    """Clean every item in a validated plan, and tally what happened.
+
+    The loop lives here rather than in ``gui.py`` for the reason this module
+    exists: what it does has to be testable where Tk is absent, and "the batch
+    kept going after one file failed" is not a claim worth making untested.
+
+    ``items`` is the manifest :func:`plan_batch` validated before the worker
+    started, and destinations are never recomputed from anything live.  The
+    file selection and the output folder are widgets the user can change while
+    the run is under way; a destination worked out mid-run could collide with
+    one already written, which is the loss :func:`plan_batch` exists to
+    prevent and would have been reintroduced after the check had passed.
+
+    One file's unexpected failure is that file's, not the run's.  ``process()``
+    already turns its own exceptions into errors, so this guard is for
+    everything around it — without it a single bad file ended the batch, and
+    every remaining file went unprocessed with no record of why.
+    """
+    tally = RunTally()
+    total = len(items)
+
+    for index, item in enumerate(items, 1):
+        if announce is not None:
+            announce(index, total, item)
+        log(f"[{index}/{total}] {item.source.name}")
+
+        try:
+            report = clean(item)
+        except Exception as exc:
+            # Nothing below the callback is trusted to have reported this.
+            report = FileReport(
+                FileOutcome.FAILED, output_written=item.destination.exists()
+            )
+            log(f"  ERROR: {item.source.name} could not be processed: {exc}")
+            if report.output_written:
+                log(f"  A file was left behind and is UNVERIFIED: {item.destination}")
+
+        tally.add(report)
+        if report.output_written and report.outcome is not FileOutcome.FAILED:
+            log(f"  -> {item.destination.name}")
+        log("")
+
+    return tally

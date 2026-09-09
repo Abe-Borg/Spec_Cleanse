@@ -18,7 +18,15 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from apppaths import resolve_config_path
-from batch import BatchItem, BatchPlan, FileOutcome, plan_batch, summarise
+from batch import (
+    BatchItem,
+    BatchPlan,
+    FileOutcome,
+    FileReport,
+    describe_categories,
+    plan_batch,
+    run_batch,
+)
 from detection import DetectionEngine, ContentType, config_notices
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
@@ -132,13 +140,17 @@ def _clean_one(
     engine: DetectionEngine,
     log,
     strip_revisions: bool = False,
-) -> FileOutcome:
+) -> FileReport:
     """Run single-pass content removal on a single file.
 
     Writing the output and verifying it are separate outcomes.  A file whose
     verification reported a preserve violation was written successfully and is
     still not something to hand on unread, so it is neither a success nor a
     failure: it needs review, and the caller is told which.
+
+    "Needs review" on its own is not something a user can act on, so the
+    report also names the categories behind it — reading the document, fixing
+    the configuration and checking a cross-reference are three different jobs.
     """
     processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
@@ -151,7 +163,7 @@ def _clean_one(
     if not result.success:
         for err in result.errors:
             log(f"  ERROR: {err}")
-        return FileOutcome.FAILED
+        return FileReport(FileOutcome.FAILED, output_written=output_path.exists())
 
     removed, redacted, preserved = _group_detections(result.detections)
     log(f"    Removed {sum(len(v) for v in removed.values())} items,"
@@ -173,9 +185,10 @@ def _clean_one(
         # produced would be false, and hiding the path would leave an
         # unverified document sitting in the output folder unannounced.
         log(f"  FAILED: the output could not be verified: {exc}")
-        if output_path.exists():
+        written = output_path.exists()
+        if written:
             log(f"  The cleaned file was written but is UNVERIFIED: {output_path}")
-        return FileOutcome.FAILED
+        return FileReport(FileOutcome.FAILED, output_written=written)
 
     _log_verification(vresult, log)
 
@@ -183,10 +196,14 @@ def _clean_one(
         f" {vresult.removed_characters:,} characters of text taken out")
 
     if vresult.passed:
-        return FileOutcome.VERIFIED
+        return FileReport(FileOutcome.VERIFIED, output_written=True)
 
-    log(f"  NEEDS REVIEW — the cleaned file was written: {output_path}")
-    return FileOutcome.NEEDS_REVIEW
+    categories = vresult.review_categories()
+    log(f"  NEEDS REVIEW ({describe_categories({c: 1 for c in categories})})"
+        f" — the cleaned file was written: {output_path}")
+    return FileReport(
+        FileOutcome.NEEDS_REVIEW, frozenset(categories), output_written=True
+    )
 
 
 def _log_verification(vresult, log) -> None:
@@ -727,29 +744,26 @@ class SpecCleanseGUI:
             if engine is None:
                 return
 
-            total = len(items)
-            counts = {outcome: 0 for outcome in FileOutcome}
+            def announce(index: int, total: int, item: BatchItem) -> None:
+                self._set_status(f"Cleaning {index}/{total}: {item.source.name}")
+                self._set_progress((index - 1) / total * 100)
 
             # The destinations were worked out and validated before this
-            # thread started.  They are not recomputed here: the selection and
-            # output folder are live widgets the user can change mid-run.
-            for i, item in enumerate(items, 1):
-                self._set_status(f"Cleaning {i}/{total}: {item.source.name}")
-                self._set_progress((i - 1) / total * 100)
-                self._log(f"[{i}/{total}] {item.source.name}")
-
-                outcome = _clean_one(
+            # thread started.  run_batch is handed that manifest and never
+            # recomputes a destination: the selection and output folder are
+            # live widgets the user can change mid-run.
+            tally = run_batch(
+                items,
+                lambda item: _clean_one(
                     item.source, item.destination, engine, self._log, strip_revisions
-                )
-                counts[outcome] += 1
-                if outcome is not FileOutcome.FAILED:
-                    self._log(f"  -> {item.destination.name}")
-
-                self._log("")
+                ),
+                self._log,
+                announce,
+            )
 
             self._set_progress(100)
 
-            summary = summarise(counts)
+            summary = tally.summary()
             self._set_status(summary)
             self._log("=" * 50)
             self._log(summary)
