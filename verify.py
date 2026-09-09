@@ -24,8 +24,9 @@ import difflib
 import shutil
 import tempfile
 import zipfile
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 from lxml import etree
@@ -128,11 +129,17 @@ class ParagraphInfo:
         """
         return (self.part, self.story)
 
-    @property
+    @cached_property
     def text(self) -> str:
+        """The trimmed text the comparison aligns on.
+
+        Cached because ``raw_text`` never changes after construction and this
+        was read 31 million times in one 4,000-paragraph verification — 8.7s of
+        ``str.strip`` on identical input.
+        """
         return self.raw_text.strip()
 
-    @property
+    @cached_property
     def lead(self) -> int:
         """Characters trimmed from the front, mapping ``text`` offsets to raw."""
         return len(self.raw_text) - len(self.raw_text.lstrip())
@@ -807,9 +814,10 @@ def _compare_location(
         )
 
     lost = _lost_signatures(input_paras, output_paras)
+    by_text = _index_by_text(input_paras)
     attributed = set(survived)
     for idx in removals:
-        info = _attribute_removal(input_paras[idx], input_paras, lost, attributed)
+        info = _attribute_removal(input_paras[idx], by_text, lost, attributed)
         result.removed.append(_classify_removal(info, strip_revisions))
 
         # Only when the list still has members: a list whose every paragraph
@@ -897,12 +905,13 @@ def _classify_pure_deletion(
     """
     survived = set(kept)
     lost = _lost_signatures(input_paras, output_paras)
+    by_text = _index_by_text(input_paras)
     attributed = set(survived)
 
     for index, para in enumerate(input_paras):
         if index in survived:
             continue
-        info = _attribute_removal(para, input_paras, lost, attributed)
+        info = _attribute_removal(para, by_text, lost, attributed)
         result.removed.append(_classify_removal(info, strip_revisions))
         if info.numbering and info.numbering in surviving_numbering:
             result.numbering.append(NumberingNotice(
@@ -919,21 +928,48 @@ def _lost_signatures(
     A multiset difference, so two identical paragraphs that both survive are
     not mistaken for one.  This is what says *which* occurrence of a repeated
     text actually disappeared — a question the text alone cannot answer.
+
+    Grouped in one pass per side rather than rescanning both for every distinct
+    text.  The rescan was O(distinct x n), which on a document of mostly unique
+    paragraphs is O(n^2): once the paragraph matcher was no longer the
+    bottleneck this became 88% of verification time at 4,000 paragraphs, and it
+    was simply hidden behind the matcher before.  Same multisets, same answer.
     """
+    before: dict[str, Counter] = defaultdict(Counter)
+    for para in input_paras:
+        before[para.text][para.signature] += 1
+
+    after: dict[str, Counter] = defaultdict(Counter)
+    for para in output_paras:
+        after[para.text][para.signature] += 1
+
     lost: dict[str, Counter] = {}
-    for text in {p.text for p in input_paras}:
-        missing = (
-            Counter(p.signature for p in input_paras if p.text == text)
-            - Counter(p.signature for p in output_paras if p.text == text)
-        )
+    for text, counts in before.items():
+        missing = counts - after[text] if text in after else counts
         if missing:
             lost[text] = missing
     return lost
 
 
+def _index_by_text(
+    paragraphs: list[ParagraphInfo],
+) -> dict[str, list[tuple[int, ParagraphInfo]]]:
+    """Where each text occurs, built once per location.
+
+    ``_attribute_removal`` used to rescan every paragraph for every removal,
+    which is O(removals x n) — 0.95s of a 1.79s verification at 4,000
+    paragraphs once the earlier hotspots were gone.  Grouping first is the same
+    lookup, computed once.
+    """
+    grouped: dict[str, list[tuple[int, ParagraphInfo]]] = defaultdict(list)
+    for index, para in enumerate(paragraphs):
+        grouped[para.text].append((index, para))
+    return grouped
+
+
 def _attribute_removal(
     info: ParagraphInfo,
-    candidates: list[ParagraphInfo],
+    by_text: dict[str, list[tuple[int, ParagraphInfo]]],
     lost: dict[str, Counter],
     attributed: set[int],
 ) -> ParagraphInfo:
@@ -955,10 +991,7 @@ def _attribute_removal(
     if remaining is None:
         return info
 
-    same_text = [
-        (index, para) for index, para in enumerate(candidates)
-        if para.text == info.text
-    ]
+    same_text = by_text.get(info.text, ())
     if len(same_text) < 2:
         return info
 
