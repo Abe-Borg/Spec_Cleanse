@@ -91,6 +91,63 @@ class CopyrightNegatives(ShippedPolicyTestCase):
         )
 
 
+class CopyingLanguageNegatives(ShippedPolicyTestCase):
+    """Restrictions on copying that are requirements, not copyright notices.
+
+    Reproduction and duplication language says the same thing, about the same
+    act, in a notice and in a requirement. What differs is who is imposing the
+    restriction, and that is not in the text. Three narrowed rules each looked
+    safe against the F01 examples and then took one of these; they were removed
+    rather than narrowed further, and these are the cases that decided it.
+
+    Door hardware key control and submittal restrictions appear in essentially
+    every nonresidential project, so a rule that eats them is not a corner case.
+    """
+
+    def test_keys_designed_to_prevent_unauthorized_duplication(self):
+        # Took the narrowed `unauthorized (\w+ ){0,2}(reproduction|duplication)`.
+        self.assertSurvives("Provide keys designed to prevent unauthorized duplication.")
+
+    def test_cylinders_that_prevent_unauthorized_key_duplication(self):
+        self.assertSurvives(
+            "Cylinders shall be of a type that prevents unauthorized key duplication."
+        )
+
+    def test_patented_keyways_restricting_duplication(self):
+        self.assertSurvives(
+            "Furnish patented keyways to restrict unauthorized duplication."
+        )
+
+    def test_key_duplication_prohibited_without_authorization(self):
+        # Took the narrowed `duplication (\w+ ){0,2}is (strictly )?prohibited`.
+        self.assertSurvives(
+            "Duplication of keys is prohibited without written authorization "
+            "from the Owner."
+        )
+
+    def test_shop_drawings_not_reproduced_in_whole_or_in_part(self):
+        # Took the narrowed `may not be reproduced (in whole|in part|without
+        # written)`.  A submittal restriction is boilerplate too, and reaches
+        # for the same words a notice does.
+        self.assertSurvives(
+            "Shop Drawings may not be reproduced in whole or in part without "
+            "the Architect's written consent."
+        )
+
+    def test_record_drawings_not_reproduced_without_approval(self):
+        self.assertSurvives(
+            "Record Drawings may not be reproduced without written approval "
+            "of the Owner."
+        )
+
+    def test_software_licensed_for_use_by_the_owner(self):
+        # `licensed for use by` was unanchored and took this.  A licence line
+        # opens with the phrase; a requirement embeds it mid-sentence.
+        self.assertSurvives(
+            "Software licensed for use by the Owner shall be transferable."
+        )
+
+
 class EditorialOverreachNegatives(ShippedPolicyTestCase):
     """Requirement prose that the high-confidence editorial tier currently claims."""
 
@@ -154,6 +211,20 @@ class ShippedPolicyPositives(ShippedPolicyTestCase):
 
     def test_copy_instruction_pointing_above(self):
         self.assertCleaned("Copy paragraphs above for each additional riser.")
+
+    def test_a_licence_line_opening_with_the_phrase(self):
+        self.assertCleaned("Licensed for use by a single user.")
+
+    def test_the_arcom_distribution_notice(self):
+        self.assertCleaned(
+            "This document is exclusively published and distributed by ARCOM."
+        )
+
+    def test_a_dated_copyright_line(self):
+        self.assertCleaned(
+            "Copyright 2026 by the American Institute of Architects. "
+            "All rights reserved."
+        )
 
     def test_inline_placeholder_is_cut_and_the_requirement_kept(self):
         path = self.build(db.document(db.text_para(

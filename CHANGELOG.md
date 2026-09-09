@@ -9,12 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Rules that were deleting real requirement text have been narrowed. Three
-  copyright patterns (`may not be reproduced`, `duplication.*?prohibited`,
-  `unauthorized.*?reproduction`) matched ordinary specification prose;
-  reproduction and duplication language is not by itself a copyright notice, so
-  the narrowed forms require either an unambiguous marker or the boilerplate
-  clause a notice actually uses, with bounded gaps that keep the words adjacent.
+- Rules that were deleting real requirement text have been narrowed. The
+  copyright section now fires only on unambiguous markers — ©, "copyright",
+  "all rights reserved", the ARCOM distribution line, and an anchored "licensed
+  for use by". Three patterns that keyed on reproduction or duplication
+  language (`may not be reproduced`, `duplication.*?prohibited`,
+  `unauthorized.*?reproduction`) are gone rather than narrowed: that language
+  says the same thing, about the same act, in a notice and in a requirement,
+  and what differs — who imposes the restriction — is not in the text. Narrowed
+  forms were tried and each one still took routine specification prose, such as
+  "Provide keys designed to prevent unauthorized duplication." and "Shop
+  Drawings may not be reproduced in whole or in part without the Architect's
+  written consent." A notice carrying no marker now survives; that is one line
+  of boilerplate against a deleted requirement, and the notice blocks this tool
+  targets all carry a marker. `licensed for use by` was also anchored, having
+  taken "Software licensed for use by the Owner shall be transferable.".
   `select one` now requires an editorial referent — above, below, following,
   paragraph, option, article — so "Select one of the following paragraphs" is
   cleaned and "Select one of the listed manufacturers" is not. `retain or
