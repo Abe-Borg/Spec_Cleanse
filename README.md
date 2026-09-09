@@ -302,6 +302,25 @@ protected whole. The requirement styles (`PR1`–`PR5`) are deliberately **not**
 listed — they carry the body of the specification, which is exactly where the
 placeholders that need redacting live.
 
+## What has and has not been validated
+
+`IMPLEMENTATION_REPORT.md` records this in full. The short version, because it
+bears on how much weight the verification verdict deserves:
+
+- **No real specification corpus has ever been measured.** Every fixture behind
+  every test and benchmark is generated. The census tools exist and are tested;
+  none has been pointed at a folder of real documents.
+- **No cleaned file has been opened in Word as part of this work.** CI builds the
+  Windows executable and runs the test suite on Windows, but nothing opens a
+  document. Until that happens the project makes no claim of Word compatibility —
+  and the case that most needs it is a table whose last row a revision deleted,
+  which passed every structural check here until the lint was given a rule for it.
+- **Verification is a consistency check.** It shares its patterns with the
+  cleaner, so a rule that removes the wrong thing is reported as expected.
+
+None of this makes the tool unusable; it makes the verdict advisory, which is
+what it says it is. Read the log rather than the exit status.
+
 ## Verification
 
 After cleaning, SpecCleanse compares the input and output and reports:
