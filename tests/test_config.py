@@ -173,3 +173,42 @@ class ConfigNoticeTests(unittest.TestCase):
                 len(notices), len(superseded),
                 f"{section}: not every recorded pattern was recognised",
             )
+
+    def test_a_disabled_section_raises_no_notice(self):
+        # Every detector short-circuits on `enabled`, so a superseded pattern
+        # under a disabled section cannot reach any output.  A notice about it
+        # would warn about something that provably did not happen — and since
+        # a notice makes every file in a run need review, it would be that
+        # warning repeated over the whole batch.
+        section, superseded = next(iter(SUPERSEDED_PATTERNS.items()))
+        pattern = next(iter(superseded))
+
+        self.assertEqual(
+            config_notices({section: {"enabled": False, "text_patterns": [pattern]}}),
+            [],
+        )
+
+    def test_the_same_pattern_in_an_enabled_section_still_raises_one(self):
+        # The guard against the case above being satisfied by a check that
+        # never reports anything.
+        section, superseded = next(iter(SUPERSEDED_PATTERNS.items()))
+        pattern = next(iter(superseded))
+
+        self.assertEqual(
+            len(config_notices({section: {"text_patterns": [pattern]}})), 1
+        )
+
+    def test_formatting_only_removal_under_a_disabled_section_raises_nothing(self):
+        # The setting only reaches SpecifierNoteDetector's scoring, which the
+        # engine never runs when the section is off.
+        self.assertEqual(
+            config_notices({
+                "specifier_notes": {"enabled": False, "formatting_only_removal": True}
+            }),
+            [],
+        )
+
+    def test_formatting_only_removal_in_an_enabled_section_still_raises_one(self):
+        self.assertEqual(
+            len(config_notices({"specifier_notes": {"formatting_only_removal": True}})), 1
+        )

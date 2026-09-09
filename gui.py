@@ -18,7 +18,16 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from apppaths import resolve_config_path
-from batch import BatchItem, BatchPlan, FileOutcome, plan_batch, summarise
+from batch import (
+    BatchItem,
+    BatchPlan,
+    FileOutcome,
+    FileReport,
+    ReviewCategory,
+    describe_categories,
+    plan_batch,
+    run_batch,
+)
 from detection import DetectionEngine, ContentType, config_notices
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
@@ -132,13 +141,24 @@ def _clean_one(
     engine: DetectionEngine,
     log,
     strip_revisions: bool = False,
-) -> FileOutcome:
+    configuration_notice: bool = False,
+) -> FileReport:
     """Run single-pass content removal on a single file.
 
     Writing the output and verifying it are separate outcomes.  A file whose
     verification reported a preserve violation was written successfully and is
     still not something to hand on unread, so it is neither a success nor a
     failure: it needs review, and the caller is told which.
+
+    "Needs review" on its own is not something a user can act on, so the
+    report also names the categories behind it — reading the document, fixing
+    the configuration and checking a cross-reference are three different jobs.
+
+    ``configuration_notice`` says the rules that produced this file are worth
+    knowing about, and it is decided once per run rather than per file: the
+    configuration cannot change between two files in one batch.  It is passed
+    in rather than read from the engine here so that the notices are computed
+    and logged in exactly one place.
     """
     processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
@@ -151,7 +171,10 @@ def _clean_one(
     if not result.success:
         for err in result.errors:
             log(f"  ERROR: {err}")
-        return FileOutcome.FAILED
+        # `result.wrote_output`, not `output_path.exists()`: a destination left
+        # by an earlier good run is there either way, and calling it this run's
+        # unverified output invites the user to delete a fine document.
+        return FileReport(FileOutcome.FAILED, output_written=result.wrote_output)
 
     removed, redacted, preserved = _group_detections(result.detections)
     log(f"    Removed {sum(len(v) for v in removed.values())} items,"
@@ -173,20 +196,42 @@ def _clean_one(
         # produced would be false, and hiding the path would leave an
         # unverified document sitting in the output folder unannounced.
         log(f"  FAILED: the output could not be verified: {exc}")
-        if output_path.exists():
+        if result.wrote_output:
             log(f"  The cleaned file was written but is UNVERIFIED: {output_path}")
-        return FileOutcome.FAILED
+        return FileReport(FileOutcome.FAILED, output_written=result.wrote_output)
 
     _log_verification(vresult, log)
 
     log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
         f" {vresult.removed_characters:,} characters of text taken out")
 
-    if vresult.passed:
-        return FileOutcome.VERIFIED
+    # ``passed`` stays the authority on whether the comparison is content with
+    # the output, and the categories explain it.  Deriving the verdict from the
+    # categories instead would look equivalent — today it is — and would fail
+    # silently the moment something new contributes to ``passed`` without a
+    # category to match: a real failure would report Verified.  A test asserts
+    # the two agree.
+    if vresult.passed and not configuration_notice:
+        return FileReport(FileOutcome.VERIFIED, output_written=result.wrote_output)
 
-    log(f"  NEEDS REVIEW — the cleaned file was written: {output_path}")
-    return FileOutcome.NEEDS_REVIEW
+    categories = vresult.review_categories()
+    if configuration_notice:
+        # Nothing in a comparison of two documents can see this, which is why
+        # verification does not report it.  It belongs to the outcome all the
+        # same: a run with formatting-only removal switched on, or with a rule
+        # still active that was narrowed for deleting requirements, produced
+        # this file under rules that can remove text no content evidence
+        # supports.  A clean comparison against those rules is agreement with
+        # them, not a reason to hand the file on unread.
+        categories.add(ReviewCategory.CONFIGURATION)
+
+    named = describe_categories({c: 1 for c in categories}) or "uncategorised"
+    log(f"  NEEDS REVIEW ({named})"
+        f" — the cleaned file was written: {output_path}")
+    return FileReport(
+        FileOutcome.NEEDS_REVIEW, frozenset(categories),
+        output_written=result.wrote_output,
+    )
 
 
 def _log_verification(vresult, log) -> None:
@@ -727,29 +772,32 @@ class SpecCleanseGUI:
             if engine is None:
                 return
 
-            total = len(items)
-            counts = {outcome: 0 for outcome in FileOutcome}
+            def announce(index: int, total: int, item: BatchItem) -> None:
+                self._set_status(f"Cleaning {index}/{total}: {item.source.name}")
+                self._set_progress((index - 1) / total * 100)
 
             # The destinations were worked out and validated before this
-            # thread started.  They are not recomputed here: the selection and
-            # output folder are live widgets the user can change mid-run.
-            for i, item in enumerate(items, 1):
-                self._set_status(f"Cleaning {i}/{total}: {item.source.name}")
-                self._set_progress((i - 1) / total * 100)
-                self._log(f"[{i}/{total}] {item.source.name}")
+            # thread started.  run_batch is handed that manifest and never
+            # recomputes a destination: the selection and output folder are
+            # live widgets the user can change mid-run.
+            # Decided once: the configuration cannot change between two files
+            # in one batch, and the notices themselves are logged by
+            # _load_engine rather than repeated per file.
+            notice = bool(config_notices(engine.config))
 
-                outcome = _clean_one(
-                    item.source, item.destination, engine, self._log, strip_revisions
-                )
-                counts[outcome] += 1
-                if outcome is not FileOutcome.FAILED:
-                    self._log(f"  -> {item.destination.name}")
-
-                self._log("")
+            tally = run_batch(
+                items,
+                lambda item: _clean_one(
+                    item.source, item.destination, engine, self._log,
+                    strip_revisions, notice,
+                ),
+                self._log,
+                announce,
+            )
 
             self._set_progress(100)
 
-            summary = summarise(counts)
+            summary = tally.summary()
             self._set_status(summary)
             self._log("=" * 50)
             self._log(summary)

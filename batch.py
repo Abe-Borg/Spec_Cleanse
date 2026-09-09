@@ -14,6 +14,7 @@ source.
 """
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -32,13 +33,63 @@ class FileOutcome(Enum):
     FAILED = "failed"
 
 
-def summarise(counts: dict[FileOutcome, int]) -> str:
+class ReviewCategory(Enum):
+    """Why a file needs review — the four kinds, never pooled.
+
+    §10.6 criterion 3 requires these measured separately, and carries one
+    non-gating requirement into this package: the same split has to reach the
+    user, not only the acceptance measurement.  The reason is specific.  A
+    Needs-review rate dominated by ``AMBIGUOUS_ALIGNMENT`` would say the
+    verifier cannot follow its own reasoning on real documents, which is a
+    reason to revisit the comparison; the same rate dominated by
+    ``DETECTED_DAMAGE`` would say the cleaner is losing content, which is a
+    different problem with a different fix.  One pooled number cannot tell
+    those apart, and a verdict that cannot be acted on will be ignored.
+
+    They are deliberately not ordered by severity.  A file can be in several
+    at once, and picking one to show would be the pooling this exists to end.
+    """
+
+    #: The verifier could not establish *which* source paragraph a difference
+    #: belongs to, or could not reason about the paragraph's offsets at all.
+    #: Something is unexplained; where it came from is a guess.
+    AMBIGUOUS_ALIGNMENT = "ambiguous alignment"
+
+    #: Content is gone, or content the output invented is present, and the
+    #: alignment that says so was exact.  A claim about the document.
+    DETECTED_DAMAGE = "detected damage"
+
+    #: The rules that produced this file are not the shipped defaults in a way
+    #: worth knowing about.  Nothing is wrong with the output as such.
+    CONFIGURATION = "configuration notice"
+
+    #: A cross-reference this run broke, or numbering a removal may have
+    #: shifted.  Nothing was lost; what a reader sees may differ.
+    REFERENCE_NUMBERING = "reference/numbering warning"
+
+
+def summarise(
+    counts: dict[FileOutcome, int],
+    categories: dict[ReviewCategory, int] | None = None,
+    unverified_outputs: int = 0,
+) -> str:
     """One line describing how a finished run turned out.
 
     Every outcome that actually occurred is named.  There is deliberately no
     "succeeded" total: that word used to cover both a verified file and one
     whose verification reported a preserve violation, which is the confusion
     :class:`FileOutcome` exists to end.
+
+    ``categories`` names why the Needs-review files need it.  The counts are
+    per *category*, not per file — a file in two categories is counted in
+    both — so they can exceed the Needs-review total.  That is the honest
+    shape: forcing one category per file would mean choosing which of two
+    real concerns to hide.
+
+    ``unverified_outputs`` is how many failures nonetheless left a file on
+    disk.  §14.1 asks the disposition to be explicit either way: "failed" on
+    its own leaves a reader unable to tell whether there is something in the
+    output folder to delete.
     """
     verified = counts.get(FileOutcome.VERIFIED, 0)
     review = counts.get(FileOutcome.NEEDS_REVIEW, 0)
@@ -48,11 +99,33 @@ def summarise(counts: dict[FileOutcome, int]) -> str:
     if verified:
         parts.append(f"{verified} verified")
     if review:
-        parts.append(f"{review} need{'s' if review == 1 else ''} review")
+        detail = describe_categories(categories or {})
+        parts.append(
+            f"{review} need{'s' if review == 1 else ''} review"
+            + (f" ({detail})" if detail else "")
+        )
     if failed:
-        parts.append(f"{failed} failed")
+        parts.append(
+            f"{failed} failed"
+            + (f" ({unverified_outputs} wrote an unverified file)"
+               if unverified_outputs else "")
+        )
 
     return "Done: " + (", ".join(parts) if parts else "no files processed")
+
+
+def describe_categories(categories: dict[ReviewCategory, int]) -> str:
+    """The Needs-review reasons, in a fixed order, naming only what occurred.
+
+    Declaration order, not frequency: a summary whose wording reshuffles
+    between runs is harder to read than one that does not, and there is no
+    severity ranking to sort by.
+    """
+    return ", ".join(
+        f"{categories[category]} {category.value}"
+        for category in ReviewCategory
+        if categories.get(category)
+    )
 
 
 #: Appended to an input's stem to name its cleaned output.
@@ -265,3 +338,113 @@ def plan_batch(files: list[Path], output_dir: Path | None = None) -> BatchPlan:
             item.destination for item in items if item.destination.exists()
         ]
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Running a validated plan
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class FileReport:
+    """What became of one file, and why.
+
+    The outcome alone cannot be acted on.  "Needs review" says a file is not
+    ready to hand on; it does not say whether to go and read the document, fix
+    the configuration, or check a cross-reference — three different pieces of
+    work.  ``categories`` is what makes the verdict actionable, and it is a
+    set because a file can genuinely be in more than one.
+
+    ``output_written`` is separate from the outcome because a failure can
+    still leave a file on disk: verification raising after a successful write
+    is exactly that case, and §14.1 requires the disposition stated rather
+    than left for the reader to guess.
+    """
+
+    outcome: FileOutcome
+    categories: frozenset[ReviewCategory] = frozenset()
+    output_written: bool = False
+
+
+@dataclass
+class RunTally:
+    """Running counts for a batch, and the line that describes it."""
+
+    counts: dict[FileOutcome, int] = field(default_factory=dict)
+    categories: dict[ReviewCategory, int] = field(default_factory=dict)
+    #: Files that failed but left something on disk anyway.
+    unverified_outputs: int = 0
+
+    def add(self, report: FileReport) -> None:
+        self.counts[report.outcome] = self.counts.get(report.outcome, 0) + 1
+        for category in report.categories:
+            self.categories[category] = self.categories.get(category, 0) + 1
+        if report.outcome is FileOutcome.FAILED and report.output_written:
+            self.unverified_outputs += 1
+
+    def summary(self) -> str:
+        return summarise(self.counts, self.categories, self.unverified_outputs)
+
+
+def run_batch(
+    items: list[BatchItem],
+    clean: Callable[[BatchItem], FileReport],
+    log: Callable[[str], None],
+    announce: Callable[[int, int, BatchItem], None] | None = None,
+) -> RunTally:
+    """Clean every item in a validated plan, and tally what happened.
+
+    The loop lives here rather than in ``gui.py`` for the reason this module
+    exists: what it does has to be testable where Tk is absent, and "the batch
+    kept going after one file failed" is not a claim worth making untested.
+
+    ``items`` is the manifest :func:`plan_batch` validated before the worker
+    started, and destinations are never recomputed from anything live.  The
+    file selection and the output folder are widgets the user can change while
+    the run is under way; a destination worked out mid-run could collide with
+    one already written, which is the loss :func:`plan_batch` exists to
+    prevent and would have been reintroduced after the check had passed.
+
+    One file's unexpected failure is that file's, not the run's.  ``process()``
+    already turns its own exceptions into errors, so this guard is for
+    everything around it — without it a single bad file ended the batch, and
+    every remaining file went unprocessed with no record of why.
+
+    When the callback raises there is no result to ask, so the destination is
+    checked *before* the call as well as after.  Only a file that appeared is
+    this run's; one that was already there is an earlier run's output and is
+    reported as such.  Inferring a write from the file merely existing
+    afterwards would tell the user their good document is unverified, which is
+    an invitation to delete it.
+    """
+    tally = RunTally()
+    total = len(items)
+
+    for index, item in enumerate(items, 1):
+        if announce is not None:
+            announce(index, total, item)
+        log(f"[{index}/{total}] {item.source.name}")
+
+        existed = item.destination.exists()
+        try:
+            report = clean(item)
+        except Exception as exc:
+            # Nothing below the callback is trusted to have reported this.
+            appeared = not existed and item.destination.exists()
+            report = FileReport(FileOutcome.FAILED, output_written=appeared)
+            log(f"  ERROR: {item.source.name} could not be processed: {exc}")
+            if appeared:
+                log(f"  A file was left behind and is UNVERIFIED: {item.destination}")
+            elif existed:
+                # Deliberately not counted as this run's output.  Whether the
+                # run got as far as overwriting it is unknowable from here, and
+                # the safe reading is the one that does not call an existing
+                # document unverified.
+                log(f"  {item.destination.name} was already there before this run;"
+                    " it may be an earlier output and was not checked.")
+
+        tally.add(report)
+        if report.output_written and report.outcome is not FileOutcome.FAILED:
+            log(f"  -> {item.destination.name}")
+        log("")
+
+    return tally

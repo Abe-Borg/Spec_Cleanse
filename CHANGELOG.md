@@ -124,6 +124,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   More editorial text survives as a result. That is the intended trade: a
   retained note costs noise in whatever reads the cleaned file, a deleted
   requirement is not recoverable from it.
+- **Every file that needs review now says why.** The outcome carried one
+  undifferentiated verdict, so a file needing a look because a cross-reference
+  broke, because the configuration is unusual, or because a requirement went
+  missing all read identically — three different pieces of work, reported the
+  same way. Each outcome now names its categories: **ambiguous alignment**,
+  **detected damage**, **configuration notice**, **reference/numbering
+  warning**. They are counted separately and never pooled, and a file that is
+  genuinely in more than one is reported in all of them rather than reduced to
+  whichever sounded worst. The run summary carries the same split, and states
+  whether a failed file nonetheless left something on disk.
+
+  The split between the first two turns on how the verdict was reached, not on
+  how bad it sounds. A preserve violation, an invented paragraph or a
+  structural problem is a claim about the document. An unexplained removal or
+  modification is such a claim only where the alignment behind it was exact;
+  where the pairing came from the similarity fallback, what the report
+  establishes is that the comparison could not follow the change. On a real
+  pair that path reported the fragments `nd hangers a` and ` on drawings` —
+  artefacts of where the differ happened to align, not text anyone edited out.
+
+- **A configuration notice now makes a file need review.** Verification shares
+  its patterns with the cleaner, so a pass means the output agrees with the
+  rules it was given. When those rules include removal on formatting alone —
+  the one path that removes text on no content evidence — or a rule still
+  active that was narrowed because it deleted requirements, that agreement is
+  not evidence the file can be handed on unread. With such a configuration
+  every file in the run needs review, which is the intended reading; the
+  category is what tells a user to go and look at their `patterns.yaml` rather
+  than hunt through a document for a loss that never happened.
+
 - **`specifier_notes.formatting_only_removal` now defaults to `false`.** It is
   the only mechanism that removes text on no content evidence at all — no
   pattern, no style, only italic plus an editorial colour — and specification
@@ -224,6 +254,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
 
 ### Fixed
+
+- **One file's failure no longer ends the batch.** `DocxProcessor.process()`
+  turns its own exceptions into errors, but anything raised around it reached
+  the run's outer handler and stopped it, leaving every remaining file
+  unprocessed with nothing in the log to say why. A file that fails
+  unexpectedly is now counted as that file's failure and the run continues. The
+  loop moved from `gui.py` into `batch.py` so that this is testable where
+  `tkinter` is absent, which is every Linux run.
 
 - **A cross-reference this run broke is now reported.** A bookmark inside a
   removed paragraph went with it while the `REF` field naming it survived,
@@ -333,9 +371,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so they have not yet been pointed at one. Any decision taken about the
   formatting-only default or the scope of reference protection must record
   whether it had census data or was a judgement call without it.
-- Suite baseline at the time of writing: 245 passed, 9 skipped, 0 expected
-  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the nine GUI
-  skips run, so the counts there are 245 passed and 0 skipped. Every case that
+- Suite baseline at the time of writing: 361 passed, 13 skipped, 0 expected
+  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the thirteen GUI
+  skips run, so the counts there are 361 passed and 0 skipped. Every case that
   was carried under `unittest.expectedFailure` has since been closed by the
   package its docstring named. An expected failure is not a failure and an
   unexpected success is; they are tracked separately for that reason.

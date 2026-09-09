@@ -14,6 +14,9 @@ import batch
 from batch import (
     BatchItem,
     FileOutcome,
+    FileReport,
+    ReviewCategory,
+    run_batch,
     output_for,
     plan_batch,
     same_file,
@@ -276,3 +279,167 @@ class FileOutcomeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RunBatchTests(unittest.TestCase):
+    """Driving a validated plan, where no window is needed to watch it.
+
+    This loop used to live in ``gui.py``, so "the batch kept going after one
+    file failed" was a claim no Linux run could check.
+    """
+
+    def setUp(self):
+        self.temp_dir = Path(tempfile.mkdtemp(prefix="speccleanse_runbatch_"))
+        self.addCleanup(shutil.rmtree, self.temp_dir, True)
+        self.lines: list[str] = []
+
+    def item(self, name: str) -> BatchItem:
+        source = self.temp_dir / f"{name}.docx"
+        source.write_bytes(b"not really a docx")
+        return BatchItem(source=source, destination=self.temp_dir / f"{name}_cleaned.docx")
+
+    @property
+    def output(self) -> str:
+        return "\n".join(self.lines)
+
+    def test_counts_and_categories_are_tallied(self):
+        reports = {
+            "a": FileReport(FileOutcome.VERIFIED, output_written=True),
+            "b": FileReport(
+                FileOutcome.NEEDS_REVIEW,
+                frozenset({ReviewCategory.DETECTED_DAMAGE}),
+                output_written=True,
+            ),
+            "c": FileReport(FileOutcome.FAILED),
+        }
+        items = [self.item(name) for name in reports]
+
+        tally = run_batch(items, lambda i: reports[i.source.stem], self.lines.append)
+
+        self.assertEqual(tally.counts, {
+            FileOutcome.VERIFIED: 1,
+            FileOutcome.NEEDS_REVIEW: 1,
+            FileOutcome.FAILED: 1,
+        })
+        self.assertEqual(tally.categories, {ReviewCategory.DETECTED_DAMAGE: 1})
+        self.assertEqual(
+            tally.summary(),
+            "Done: 1 verified, 1 needs review (1 detected damage), 1 failed",
+        )
+
+    def test_a_file_in_two_categories_is_counted_in_both(self):
+        item = self.item("a")
+        report = FileReport(
+            FileOutcome.NEEDS_REVIEW,
+            frozenset({ReviewCategory.DETECTED_DAMAGE, ReviewCategory.REFERENCE_NUMBERING}),
+            output_written=True,
+        )
+
+        tally = run_batch([item], lambda _: report, self.lines.append)
+
+        self.assertEqual(tally.categories, {
+            ReviewCategory.DETECTED_DAMAGE: 1,
+            ReviewCategory.REFERENCE_NUMBERING: 1,
+        })
+
+    def test_an_exception_fails_one_file_and_the_batch_continues(self):
+        # A single bad file used to end the run, leaving every remaining file
+        # unprocessed with nothing in the log to say why.
+        items = [self.item(name) for name in ("a", "b", "c")]
+
+        def clean(item: BatchItem) -> FileReport:
+            if item.source.stem == "b":
+                raise RuntimeError("unreadable")
+            return FileReport(FileOutcome.VERIFIED, output_written=True)
+
+        tally = run_batch(items, clean, self.lines.append)
+
+        self.assertEqual(
+            tally.counts, {FileOutcome.VERIFIED: 2, FileOutcome.FAILED: 1}
+        )
+        self.assertIn("unreadable", self.output)
+        self.assertIn("[3/3] c.docx", self.output)
+
+    def test_a_failure_that_wrote_nothing_is_not_counted_as_unverified(self):
+        tally = run_batch(
+            [self.item("a")],
+            lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
+            self.lines.append,
+        )
+
+        self.assertEqual(tally.unverified_outputs, 0)
+        self.assertEqual(tally.summary(), "Done: 1 failed")
+
+    def test_only_the_validated_manifest_is_ever_cleaned(self):
+        # The selection and output folder are widgets the user can change
+        # while the run is under way.  A destination worked out mid-run could
+        # collide with one already written — the loss plan_batch exists to
+        # prevent, reintroduced after its check had passed.
+        items = [self.item("a"), self.item("b")]
+        seen: list[BatchItem] = []
+
+        def clean(item: BatchItem) -> FileReport:
+            seen.append(item)
+            # Whatever the caller does to its own state afterwards, the
+            # manifest this loop is walking cannot change.
+            items.append(self.item("c"))
+            return FileReport(FileOutcome.VERIFIED, output_written=True)
+
+        tally = run_batch(list(items), clean, self.lines.append)
+
+        self.assertEqual([i.source.stem for i in seen], ["a", "b"])
+        self.assertEqual(tally.counts, {FileOutcome.VERIFIED: 2})
+
+    def test_the_destination_is_named_only_when_something_was_written(self):
+        items = [self.item("a"), self.item("b")]
+        reports = {
+            "a": FileReport(FileOutcome.VERIFIED, output_written=True),
+            "b": FileReport(FileOutcome.FAILED),
+        }
+
+        run_batch(items, lambda i: reports[i.source.stem], self.lines.append)
+
+        self.assertIn("-> a_cleaned.docx", self.output)
+        self.assertNotIn("-> b_cleaned.docx", self.output)
+
+    def test_an_empty_plan_runs_nothing_and_says_so(self):
+        tally = run_batch([], lambda _: self.fail("should not be called"), self.lines.append)
+
+        self.assertEqual(tally.summary(), "Done: no files processed")
+        self.assertEqual(self.lines, [])
+
+    def test_a_pre_existing_destination_is_not_called_this_run_s_output(self):
+        # No result to ask when the callback raises, so the destination is
+        # checked before the call as well as after.  A file that was already
+        # there is an earlier run's, and calling it unverified would invite the
+        # user to delete a good document.
+        item = self.item("a")
+        item.destination.write_bytes(b"a perfectly good earlier output")
+
+        tally = run_batch(
+            [item],
+            lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
+            self.lines.append,
+        )
+
+        self.assertEqual(tally.unverified_outputs, 0)
+        self.assertNotIn("UNVERIFIED", self.output)
+        self.assertIn("was already there before this run", self.output)
+        self.assertEqual(tally.summary(), "Done: 1 failed")
+
+    def test_a_file_that_appeared_during_a_failed_run_is_reported(self):
+        # The guard against the case above being satisfied by never reporting
+        # an unverified output at all.
+        item = self.item("a")
+
+        def clean(i: BatchItem) -> FileReport:
+            i.destination.write_bytes(b"half a document")
+            raise RuntimeError("boom")
+
+        tally = run_batch([item], clean, self.lines.append)
+
+        self.assertEqual(tally.unverified_outputs, 1)
+        self.assertIn("UNVERIFIED", self.output)
+        self.assertIn(str(item.destination), self.output)
+        self.assertEqual(tally.summary(), "Done: 1 failed (1 wrote an unverified file)")
+
