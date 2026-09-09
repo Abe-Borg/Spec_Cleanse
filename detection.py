@@ -16,6 +16,7 @@ from docx_xml import (
     StyleIndex,
     compile_patterns,
     fold_style_names,
+    cut_spans,
     is_on,
     iter_own_runs,
     run_signature,
@@ -173,20 +174,56 @@ class ParagraphEvidence:
             for idx, char in enumerate(self.raw_text)
         )
 
-    def surviving_signature(self) -> tuple:
-        """Signatures of the runs a correct clean would leave behind.
+    def expected_profile(self) -> tuple:
+        """The run profile a correct clean would leave behind.
 
-        Every run policy did *not* authorize, in order.  Comparing this against
-        the output's own run signatures answers the question extracted text
-        cannot: which of two identical occurrences survived.  It is only ever
-        used to *accept* — a mismatch falls back to interval reasoning, so a
-        paragraph whose runs the cleaner legitimately reshaped is not newly
-        reported as damage.
+        Every run policy did *not* authorize, in order, each carrying the text
+        it keeps once the placeholders inside it are cut.  Comparing this
+        against the output's own runs answers the question extracted text
+        cannot: which of two identical occurrences survived.
+
+        The redaction has to be part of it.  A paragraph can carry both a run
+        policy permits losing and a placeholder inside a run it does not, and a
+        profile that ignored the second could never match such an output — so
+        the case fell through to a differ that then blamed the wrong copy.
+
+        It is only ever used to *accept*: a mismatch falls back to interval
+        reasoning, so a paragraph whose runs the cleaner legitimately reshaped
+        in some other way is not newly reported as damage.
         """
-        return tuple(
-            run.signature for run in self.runs
-            if not run.authorized and run.signature and run.signature[0].strip()
-        )
+        if not self.offsets_reliable:
+            return ()
+        profile: list[tuple] = []
+        for run in self.runs:
+            if run.authorized or not run.signature:
+                continue
+            cuts = [
+                (max(run.start, start) - run.start, min(run.end, end) - run.start)
+                for start, end in self.inline_spans
+                if start < run.end and end > run.start
+            ]
+            text = cut_spans(run.text, merge_spans(cuts)) if cuts else run.text
+            if not text.strip():
+                continue
+            profile.append((text,) + tuple(run.signature[1:]))
+        return tuple(profile)
+
+    def expected_text(self) -> str | None:
+        """What this paragraph becomes under the whole intended removal.
+
+        Every authorized interval cut — runs policy permits losing *and*
+        placeholder spans — not just one kind.  A paragraph that carries both,
+        say a hidden note twin beside a requirement holding a placeholder, has
+        no single-mechanism expectation to match, and matching only the inline
+        part left the differ to guess which of two identical runs went.
+
+        ``None`` when nothing is authorized, so there is no transformation to
+        expect.
+        """
+        spans = self.authorized_spans()
+        if not spans:
+            return None
+        return cut_spans(self.raw_text, spans).strip()
 
     def authorities(self) -> list[tuple[str, str, bool]]:
         """Distinct ``(category, reason, formatting_only)`` behind the intervals.

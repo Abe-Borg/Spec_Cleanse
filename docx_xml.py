@@ -280,6 +280,26 @@ def is_layout_break(node: etree._Element) -> bool:
     return (node.get(f"{W}type") or "") in LAYOUT_BREAK_TYPES
 
 
+#: Note containers whose ``w:id`` identifies one story inside a shared part.
+NOTE_TAGS = (f"{W}footnote", f"{W}endnote")
+
+
+def note_identity(para: etree._Element) -> str | None:
+    """The ``w:id`` of the footnote or endnote holding ``para``, if any.
+
+    ``footnotes.xml`` is one part holding many independent stories.  Without
+    this, a paragraph in note 3 and an identical paragraph in note 7 are two
+    interchangeable entries in a flat list, and losing one can be explained by
+    the other.
+    """
+    node = para
+    while node is not None:
+        if node.tag in NOTE_TAGS:
+            return f"{etree.QName(node).localname}:{node.get(f'{W}id')}"
+        node = node.getparent()
+    return None
+
+
 def run_signature(run: etree._Element) -> tuple:
     """A run's identity: its text and the formatting properties a reader sees.
 
@@ -307,7 +327,7 @@ def run_signature(run: etree._Element) -> tuple:
     )
 
 
-def paragraph_signature(para: etree._Element) -> tuple:
+def run_profile(para: etree._Element) -> tuple:
     """Signatures of the runs in ``para`` that carry text, in document order.
 
     Runs with no substantive text are left out: they carry structure rather
@@ -319,6 +339,27 @@ def paragraph_signature(para: etree._Element) -> tuple:
         for signature in (run_signature(run) for run in iter_own_runs(para))
         if signature[0].strip()
     )
+
+
+def paragraph_style(para: etree._Element) -> str | None:
+    """The ``w:pStyle`` applied to ``para``, if any."""
+    ppr = para.find(f"{W}pPr")
+    if ppr is None:
+        return None
+    pstyle = ppr.find(f"{W}pStyle")
+    return pstyle.get(f"{W}val") if pstyle is not None else None
+
+
+def paragraph_signature(para: etree._Element) -> tuple:
+    """A paragraph's full identity: its style and its runs.
+
+    The style has to be here and not only in the runs.  Two paragraphs can hold
+    character-for-character identical runs and still differ in what policy
+    permits, because an editorial *paragraph* style is authority the runs know
+    nothing about — which made a correct clean of the styled copy look like the
+    loss of the plain one.
+    """
+    return (paragraph_style(para), run_profile(para))
 
 
 def layout_break_offsets(scope: etree._Element) -> list[tuple[int, int]]:

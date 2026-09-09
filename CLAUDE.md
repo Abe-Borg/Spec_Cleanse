@@ -230,6 +230,60 @@ on the enclosing `w:tr` or `w:tc`, so a revision somewhere nearby is not blanket
 permission. With the option off the authority does not exist, and the same loss is
 a violation again.
 
+### Location, and Which Occurrence Went
+
+**Comparison happens inside a location, never across one.** A location is a
+package-relative part name plus, inside a part holding several independent stories,
+the note identity from `docx_xml.note_identity()`. `word/document.xml` and
+`word/glossary/document.xml` are different locations; so are footnote 3 and footnote 7
+within the one `footnotes.xml`.
+
+A flat list across every part made authority transferable between them: a requirement
+deleted from the body verified clean because an identical *hidden* paragraph in a
+header carried authority the body's copy did not. Text equality is not identity.
+
+**Within a location, repeated text still does not say which occurrence went.**
+`difflib` aligns on the longest matching block, not on evidence, so removing a hidden
+note and keeping the plain requirement beside it was blamed on the plain one — a
+correct clean reported as damage. `_lost_signatures()` takes the multiset difference of
+paragraph signatures between the two sides, and `_attribute_removal()` judges the
+paragraph the output is genuinely missing rather than whichever index the alignment
+left over. It only ever re-attributes among paragraphs whose text is already identical.
+
+Pairing is settled before any attribution. A paragraph that survives in shortened
+form is paired, but its original text is gone from the output, so it also looks
+*missing* — and offering it as the explanation for another paragraph's loss counts it
+twice and leaves the real loss unclassified, which reported a deleted requirement as a
+verified clean. Paragraphs matched inside an unchanged block are deliberately not
+reserved: there the differ matched on text alone, which for repeated text says nothing
+about which paragraph is which.
+
+Two signatures are needed because they answer different questions:
+
+| | Contents | Answers |
+|---|---|---|
+| `run_profile(para)` | the text-carrying runs' signatures | did the runs a correct clean would leave actually survive? |
+| `paragraph_signature(para)` | `(w:pStyle, run_profile)` | which of several identical paragraphs disappeared? |
+
+The style has to be in the second. Two paragraphs can hold character-for-character
+identical runs and still differ in what policy permits, because an editorial
+*paragraph* style is authority the runs know nothing about.
+
+**The expected transformation is the whole intended removal, not one mechanism.**
+`ParagraphEvidence.expected_text()` cuts every authorized interval — runs *and*
+placeholder spans — and `expected_profile()` is the run profile that leaves, each
+surviving run carrying the text it keeps once the placeholders inside it are cut. A
+paragraph holding both a hidden twin and a placeholder has no single-mechanism
+expectation to match, so it used to fall through to the differ, which then blamed the
+wrong copy.
+
+**Matching text is never sufficient on its own.** Where the output equals the expected
+text, the runs must agree as well before the intervals are taken as known — a paragraph
+holding a visible requirement and an identical hidden copy produces the same string
+whichever one was lost, and only the surviving run's properties say which. When they do
+agree the intervals are the authorized spans outright; re-deriving them by diffing would
+reintroduce the guess.
+
 **Two places mirror the processor's decision order, on purpose, for different
 questions.** `tools/actions.py` asks the processor's own methods what it *would do*,
 because a measurement must match the build being measured. `paragraph_evidence()`
