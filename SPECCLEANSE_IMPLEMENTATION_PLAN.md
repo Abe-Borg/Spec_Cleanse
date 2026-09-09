@@ -1311,6 +1311,24 @@ against, the same gap recorded for the W02 default and the W03 acceptance criter
 Automatic retention of referenced target content remains deferred to census B, per §13.1 and §3.3.
 Nothing here repairs a reference, renumbers a list, or rewrites a field.
 
+**Review round.** Three findings, one against each commit, all reproduced before fixing:
+
+- *A report named the bookmark and nothing else.* With one target referenced from the body, a header
+  and a footnote it collapsed to a single line — what was wrong, not where. References are now kept
+  per consumer and each is reported with its part and with the instruction or anchor naming it.
+- *Every rowless table was removed, not only the ones this run emptied.* A document with **no
+  revisions at all** was rewritten because the option was on. That is the cleaner changing a file for
+  a reason unrelated to its task, and the most serious of the three. Only tables an acceptance took a
+  row or cell from are considered now; a pre-existing one stays linted but unrepaired, which is the
+  rule the structural comparison already follows.
+- *Numbering ignored the default paragraph style.* `paragraph_style()` answers None for a paragraph
+  naming no style, so the chain examined nothing and a default style supplying `w:numPr` was
+  invisible.
+
+The default-style lookup was deliberately confined to numbering. The same gap exists for hidden-text
+and editorial-style resolution, but closing it there changes what the cleaner *removes* rather than
+what it *reports* — a different kind of change, belonging in its own package with its own fixtures.
+
 ## 14. W07: full batch and outcome model
 
 W00 delivered the manifest rejection and a minimally honest three-way report. W07 completes the model
