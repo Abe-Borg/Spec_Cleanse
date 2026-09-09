@@ -1279,6 +1279,38 @@ complete numbering awareness.
 no new empty-table residue is produced; numbering warnings are precise about what was detected and what
 remains uncertain; each of the three concerns landed as a separate reviewable change.
 
+### 13.4 What W06 found
+
+All three concerns reproduced exactly as written, each measured against a real clean before anything
+was designed, and each landed as its own commit.
+
+| | Reproduced | Now |
+|---|---|---|
+| §13.1 | bookmark gone, `REF` surviving, `lint=[]`, `verify passed=True` | reported, run needs review |
+| §13.2 | `tbl=1 tr=0` after accepting, `lint=[]`, `verify passed=True` | table removed; both empty shapes linted |
+| §13.3 | numbered paragraph removed, no notice of any kind | its own notice category |
+
+**Inherited numbering was implemented, not deferred.** §13.3 allowed shipping direct-only detection
+with a stated limitation if the metadata extension proved unreliable. It did not: `StyleInfo` already
+walks a `w:basedOn` chain for `w:vanish`, and reading `w:pPr/w:numPr/w:numId` alongside it is the same
+shape of work. `w:numId` `"0"` is handled as the override it is, which is the case §13.3 specifically
+warns against getting wrong.
+
+**One deliberate narrowing, stated rather than silent.** A notice is raised only when the removed
+paragraph's numbering list still has surviving members. A list whose every paragraph went renumbers
+nothing, so a notice about it would assert a consequence that cannot occur — and the exit gate asks
+for warnings that are *precise about what was detected*. This is narrower than "participates in
+automatic numbering" read literally, and it is narrower in the direction the gate points.
+
+**What is not measured.** Numbering notices contribute to a Needs-review outcome, per §13.3. How often
+that fires on real specifications is unknown: MasterSpec numbers heavily, and if it also numbers its
+specifier notes this will fire on most files. That is exactly what §10.6 criterion 3 asks to be
+counted separately, and the category now exists to count it — but no corpus was available to run it
+against, the same gap recorded for the W02 default and the W03 acceptance criteria.
+
+Automatic retention of referenced target content remains deferred to census B, per §13.1 and §3.3.
+Nothing here repairs a reference, renumbers a list, or rewrites a field.
+
 ## 14. W07: full batch and outcome model
 
 W00 delivered the manifest rejection and a minimally honest three-way report. W07 completes the model

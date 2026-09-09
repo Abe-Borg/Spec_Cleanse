@@ -962,6 +962,10 @@ class StyleInfo:
     based_on: str | None = None
     vanish: bool | None = None
     style_type: str = ""
+    #: ``w:pPr/w:numPr/w:numId/@w:val`` if the style declares one.  Three-valued
+    #: like ``vanish``: a value, the string ``"0"`` meaning *no* numbering, or
+    #: None for silence.  ``"0"`` is an override, not a list called zero.
+    num_id: str | None = None
 
 
 def load_styles(word_dir: Path) -> dict[str, StyleInfo]:
@@ -989,6 +993,7 @@ def load_styles(word_dir: Path) -> dict[str, StyleInfo]:
         based_on_elem = style.find(f"{W}basedOn")
         rpr = style.find(RPR_TAG)
         vanish_elem = rpr.find(f"{W}vanish") if rpr is not None else None
+        num_id_elem = style.find(f"{W}pPr/{W}numPr/{W}numId")
 
         styles[style_id] = StyleInfo(
             style_id=style_id,
@@ -996,9 +1001,34 @@ def load_styles(word_dir: Path) -> dict[str, StyleInfo]:
             based_on=(based_on_elem.get(f"{W}val") if based_on_elem is not None else None),
             vanish=is_on(vanish_elem) if vanish_elem is not None else None,
             style_type=style.get(f"{W}type") or "",
+            num_id=(num_id_elem.get(f"{W}val") if num_id_elem is not None else None),
         )
 
     return styles
+
+
+def numbering_id(para: etree._Element, styles: "StyleIndex") -> str | None:
+    """The automatic-numbering list this paragraph belongs to, or None.
+
+    Direct ``w:numPr`` first, then the paragraph style chain.  ``w:numId``
+    ``"0"`` is Word's way of saying *no* numbering — an explicit override of an
+    inherited value, not a list called zero — so it answers None rather than
+    counting as participation.
+
+    A ``w:numPr`` carrying only ``w:ilvl`` sets the level and leaves the list to
+    the style, so it falls through rather than answering.
+    """
+    ppr = para.find(f"{W}pPr")
+    if ppr is not None:
+        direct = ppr.find(f"{W}numPr/{W}numId")
+        if direct is not None:
+            value = direct.get(f"{W}val")
+            return None if value in (None, "0") else value
+
+    for info in styles.chain(paragraph_style(para)):
+        if info.num_id is not None:
+            return None if info.num_id == "0" else info.num_id
+    return None
 
 
 def fold_style_name(name: str) -> str:

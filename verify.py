@@ -33,6 +33,7 @@ from lxml import etree
 from detection import DetectionEngine, ParagraphEvidence
 from docx_xml import (
     P_TAG,
+    StyleIndex,
     TBL_TAG,
     TC_TAG,
     W,
@@ -45,6 +46,7 @@ from docx_xml import (
     iter_own_runs,
     iter_paragraphs,
     note_identity,
+    numbering_id,
     paragraph_signature,
     referenced_names,
     run_profile,
@@ -107,6 +109,9 @@ class ParagraphInfo:
     part: str = ""
     #: Footnote or endnote identity within a shared part, or None in body text.
     story: str | None = None
+    #: The automatic-numbering list this paragraph belongs to, if any.  Read
+    #: once during extraction rather than re-derived per removal.
+    numbering: str | None = None
     #: True if a tracked change marks this paragraph's container as deleted —
     #: a deleted table row keeps its text in plain w:t, so nothing else shows it.
     in_tracked_deletion: bool = False
@@ -206,6 +211,27 @@ class StructuralViolation:
 
 
 @dataclass
+class NumberingNotice:
+    """A removed paragraph that took part in automatic numbering.
+
+    Deliberately not a structural violation and not an unexplained removal: no
+    text integrity claim is being made.  What is being said is narrower — the
+    numbers a reader sees, and any reference written against them, *may* now
+    read differently.  Nothing here asserts that a reference broke; §13.1's
+    check is what says that, and it says it about a specific named bookmark.
+    """
+    part: str
+    numbering: str
+    preview: str
+
+    def __str__(self) -> str:
+        return (
+            f"{self.part}: removed a paragraph in numbering list {self.numbering} — "
+            f"displayed numbering or references to it may change: \"{self.preview}\""
+        )
+
+
+@dataclass
 class StructureReport:
     """What an inspection of one DOCX found."""
     issues: Counter = field(default_factory=Counter)
@@ -240,6 +266,9 @@ class VerificationResult:
     modified: list[ModifiedParagraph] = field(default_factory=list)
     structural: list[StructuralViolation] = field(default_factory=list)
     added: list[str] = field(default_factory=list)
+    #: Its own category, counted apart from damage — §10.6 criterion 3.  These
+    #: make a run need review without claiming anything was lost.
+    numbering: list[NumberingNotice] = field(default_factory=list)
 
     @property
     def expected_removals(self) -> list[RemovedParagraph]:
@@ -295,6 +324,7 @@ class VerificationResult:
             or self.preserve_violations
             or self.structural
             or self.added
+            or self.numbering
         )
 
 
@@ -334,6 +364,10 @@ def extract_paragraphs(
     """
     temp_dir = _unpack(docx_path)
     try:
+        # Read once for the whole package: numbering is resolved against the
+        # style chain, and re-parsing styles.xml per removal would be the same
+        # answer computed again for every paragraph.
+        styles = StyleIndex(load_styles(temp_dir / "word"))
         if evidence:
             engine.bind_styles(load_styles(temp_dir / "word"))
         paragraphs: list[ParagraphInfo] = []
@@ -354,6 +388,7 @@ def extract_paragraphs(
                     signature=paragraph_signature(para),
                     part=part,
                     story=note_identity(para),
+                    numbering=numbering_id(para, styles),
                     in_tracked_deletion=_in_tracked_deletion(para),
                 ))
         return paragraphs
@@ -578,12 +613,17 @@ def verify_clean(
         structural=_compare_structure(input_path, output_path, strip_revisions),
     )
 
+    # Numbering lists are document-wide, so what survives is asked once across
+    # every part rather than within each location.
+    surviving_numbering = {p.numbering for p in output_paras if p.numbering}
+
     for location in _locations(input_paras, output_paras):
         _compare_location(
             [p for p in input_paras if p.location == location],
             [p for p in output_paras if p.location == location],
             result,
             strip_revisions,
+            surviving_numbering,
         )
 
     return result
@@ -612,6 +652,7 @@ def _compare_location(
     output_paras: list[ParagraphInfo],
     result: VerificationResult,
     strip_revisions: bool,
+    surviving_numbering: set[str],
 ) -> None:
     """Classify every difference within one location.
 
@@ -674,6 +715,15 @@ def _compare_location(
     for idx in removals:
         info = _attribute_removal(input_paras[idx], input_paras, lost, attributed)
         result.removed.append(_classify_removal(info, strip_revisions))
+
+        # Only when the list still has members: a list whose every paragraph
+        # went renumbers nothing, and a notice about it would be noise
+        # dressed as precision.
+        if info.numbering and info.numbering in surviving_numbering:
+            result.numbering.append(NumberingNotice(
+                part=info.part, numbering=info.numbering,
+                preview=info.text[:60] + ("…" if len(info.text) > 60 else ""),
+            ))
 
 
 def _lost_signatures(

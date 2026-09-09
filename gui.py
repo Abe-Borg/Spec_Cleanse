@@ -230,6 +230,16 @@ def _log_verification(vresult, log) -> None:
         for r in vresult.unexpected_removals:
             log(f"      \"{_shorten(r.text)}\"")
 
+    if vresult.numbering:
+        # Its own category, and worded as what it is.  Nothing was lost here;
+        # what may have changed is the numbers a reader sees.  Saying so
+        # separately keeps it from being read as damage.
+        log(f"    NOTE — {len(vresult.numbering)} removed paragraph(s) took part "
+            "in automatic numbering; displayed numbering or references to it "
+            "may change:")
+        for notice in vresult.numbering:
+            log(f"      {notice}")
+
     if vresult.unexpected_modifications:
         log(f"    WARN — {len(vresult.unexpected_modifications)} paragraph(s) "
             "lost text no rule accounts for:")
