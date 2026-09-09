@@ -17,7 +17,14 @@ from docx_xml import (
     compile_patterns,
     fold_style_names,
     is_on,
+    iter_own_runs,
+    run_signature,
+    layout_break_offsets,
     merge_spans,
+    paragraph_text,
+    run_text,
+    spans_cover,
+    tidy_spans,
     toggle_on,
 )
 
@@ -64,6 +71,181 @@ class PatternConfig:
     formatting_signals: dict = field(default_factory=dict)
     style_names: list[str] = field(default_factory=list)
     formatting_only_removal: bool = False
+
+
+# =============================================================================
+# Source evidence
+# =============================================================================
+
+#: Category reported for an interval that is nothing but whitespace.  Callers
+#: normally filter these out before asking; the constant exists so the shape of
+#: the answer never depends on which characters happened to be in the span.
+WHITESPACE_ONLY = "whitespace"
+
+
+@dataclass(frozen=True)
+class RunEvidence:
+    """One run's text, where it sits in the paragraph, and its own authority.
+
+    ``start`` and ``end`` are offsets into the paragraph's **raw** text — the
+    string :func:`docx_xml.paragraph_text` returns, before any stripping.  An
+    offset computed against a trimmed or normalized string is not an offset
+    into the document.
+    """
+    start: int
+    end: int
+    text: str
+    category: str | None = None
+    reason: str | None = None
+    #: True when the detection crossed the threshold on formatting alone.
+    formatting_only: bool = False
+    #: This run's identity as document fact — see ``docx_xml.run_signature``.
+    signature: tuple = ()
+
+    @property
+    def authorized(self) -> bool:
+        """True if policy permits losing *this run's own text* — and no more."""
+        return self.category is not None
+
+
+@dataclass(frozen=True)
+class ParagraphEvidence:
+    """What the configured policy permits losing from one source paragraph.
+
+    Evaluated against the source document alone.  Nothing the processor reports
+    is consulted: what the cleaner says it did is not evidence about what the
+    output contains.
+
+    The distinction the flattened ``(category, regex)`` list could not carry is
+    the one that matters here — *scope*.  ``whole_category`` says a rule
+    qualified against the whole paragraph; ``runs`` say which individual runs
+    carry their own authority; ``inline_spans`` say which intervals a
+    placeholder rule authorizes.  A hidden run in a mixed paragraph produces one
+    authorized run interval, never permission to lose the requirement beside it.
+    """
+    raw_text: str
+    runs: tuple[RunEvidence, ...] = ()
+    preserve_reason: str | None = None
+    whole_category: str | None = None
+    whole_reason: str | None = None
+    #: True when the whole-paragraph rule crossed the threshold on formatting alone.
+    whole_formatting_only: bool = False
+    inline_spans: tuple[tuple[int, int], ...] = ()
+    inline_reason: str | None = None
+    #: False when run offsets could not be reconciled with the paragraph text,
+    #: in which case interval reasoning is abandoned rather than guessed at.
+    offsets_reliable: bool = True
+
+    @property
+    def preserved(self) -> bool:
+        return self.preserve_reason is not None
+
+    def authorized_spans(self) -> list[tuple[int, int]]:
+        """Every interval policy permits losing, in raw-text coordinates.
+
+        Authorized *runs* and authorized *placeholder intervals* together.  A
+        whole-paragraph rule is deliberately absent: it is not an interval
+        claim, and answering "may this fragment go?" with "the paragraph could
+        have gone" is how a paragraph-scope match came to excuse an arbitrary
+        edit inside it.
+        """
+        if not self.offsets_reliable:
+            return []
+        spans = [(r.start, r.end) for r in self.runs if r.authorized]
+        spans.extend(self.inline_spans)
+        return merge_spans(spans)
+
+    def covers_all_text(self) -> bool:
+        """True if the authorized intervals account for every substantive character.
+
+        This is what licenses losing the whole paragraph in the absence of a
+        whole-paragraph rule — and it is a real test rather than the presence of
+        one editorial signal somewhere in the paragraph.
+        """
+        if not self.offsets_reliable:
+            return False
+        covered = bytearray(len(self.raw_text))
+        for start, end in self.authorized_spans():
+            for idx in range(max(0, start), min(len(covered), end)):
+                covered[idx] = 1
+        return all(
+            covered[idx] or not char.strip()
+            for idx, char in enumerate(self.raw_text)
+        )
+
+    def surviving_signature(self) -> tuple:
+        """Signatures of the runs a correct clean would leave behind.
+
+        Every run policy did *not* authorize, in order.  Comparing this against
+        the output's own run signatures answers the question extracted text
+        cannot: which of two identical occurrences survived.  It is only ever
+        used to *accept* — a mismatch falls back to interval reasoning, so a
+        paragraph whose runs the cleaner legitimately reshaped is not newly
+        reported as damage.
+        """
+        return tuple(
+            run.signature for run in self.runs
+            if not run.authorized and run.signature and run.signature[0].strip()
+        )
+
+    def authorities(self) -> list[tuple[str, str, bool]]:
+        """Distinct ``(category, reason, formatting_only)`` behind the intervals.
+
+        In evidence order, so the first is the one reported when a caller needs
+        a single category for a loss several rules jointly account for.
+        """
+        found: list[tuple[str, str, bool]] = []
+        for run in self.runs:
+            if run.authorized:
+                found.append((run.category, run.reason or run.category, run.formatting_only))
+        if self.inline_spans:
+            found.append((
+                ContentType.INLINE_PLACEHOLDER.value,
+                self.inline_reason or ContentType.INLINE_PLACEHOLDER.value,
+                False,
+            ))
+        return list(dict.fromkeys(found))
+
+    def authorizes_whole_paragraph(self) -> bool:
+        """True if losing this entire paragraph is something policy asked for."""
+        if self.preserved:
+            return False
+        if self.whole_category is not None:
+            return True
+        return bool(self.raw_text.strip()) and self.covers_all_text()
+
+    def reason_for_span(self, start: int, end: int) -> tuple[str, str, bool] | None:
+        """The ``(category, reason, formatting_only)`` authorizing it, or None.
+
+        Whitespace is not substantive: an authorized interval may take the
+        space that fell beside it, which is what ``tidy_spans`` already does
+        when the processor cuts a placeholder out.
+        """
+        if not self.offsets_reliable:
+            return None
+        first: tuple[str, str, bool] | None = None
+        for idx in range(start, end):
+            if not self.raw_text[idx].strip():
+                continue
+            hit = self._authority_at(idx)
+            if hit is None:
+                return None
+            if first is None:
+                first = hit
+        return first or (WHITESPACE_ONLY, "adjacent whitespace", False)
+
+    def _authority_at(self, idx: int) -> tuple[str, str, bool] | None:
+        for run in self.runs:
+            if run.authorized and run.start <= idx < run.end:
+                return (run.category, run.reason or run.category, run.formatting_only)
+        for start, end in self.inline_spans:
+            if start <= idx < end:
+                return (
+                    ContentType.INLINE_PLACEHOLDER.value,
+                    self.inline_reason or ContentType.INLINE_PLACEHOLDER.value,
+                    False,
+                )
+        return None
 
 
 class BaseDetector:
@@ -675,44 +857,121 @@ class DetectionEngine:
             for d in detections
         )
 
-    def removal_patterns(self, include_inline: bool = True) -> list[tuple[str, re.Pattern]]:
-        """Every removal pattern as ``(category, compiled)``, in detector order.
+    def paragraph_evidence(self, para: etree._Element) -> ParagraphEvidence:
+        """What policy permits losing from ``para``, read from the source alone.
 
-        Verification classifies removals against exactly the patterns that
-        caused them, so a correct low-confidence or inline removal is never
-        reported as unexpected just because verification compiled a different
-        list from the same file.
+        This states the same decision the processor acts on, in the same order —
+        preserve, then a whole-paragraph rule, then placeholder intervals, then
+        individual runs — but as a pure read of the source document.  It never
+        mutates anything and never asks the processor what it did, which is the
+        boundary verification has to hold: the cleaner's account of its own work
+        cannot be the evidence that the work was right.
 
-        ``include_inline=False`` leaves out the inline tier.  Those patterns
-        never justify losing a whole paragraph — matching one only means the
-        paragraph *contained* a placeholder — so whoever judges a
-        whole-paragraph removal has to ask a different question of them.
+        Run detection is skipped for a preserved or already-removable paragraph
+        because the processor skips it too.  A preserved paragraph is left
+        completely alone — not redacted, not trimmed — so any loss inside one is
+        damage, whatever the lost text looks like.
+
+        ``tests/test_evidence.py`` pins this against what the processor actually
+        does, so the two cannot drift apart unnoticed.
         """
-        patterns: list[tuple[str, re.Pattern]] = []
-        for detector in self.detectors:
-            if not detector.config.enabled:
-                continue
-            category = detector.content_type.value
-            for pattern in detector.compiled_patterns:
-                patterns.append((category, pattern))
-            for pattern in detector.compiled_low_confidence_patterns:
-                patterns.append((category, pattern))
-            if include_inline:
-                for pattern in detector.config.inline_patterns:
-                    patterns.append((ContentType.INLINE_PLACEHOLDER.value, pattern))
-        return patterns
+        raw_text = paragraph_text(para)
 
-    def inline_patterns(self) -> list[re.Pattern]:
-        """Compiled inline placeholder patterns, across every enabled detector."""
-        return [
-            pattern
-            for detector in self.detectors
-            if detector.config.enabled
-            for pattern in detector.config.inline_patterns
+        preserve = self.preserve_detector.detect(para, raw_text)
+        if preserve is not None:
+            return ParagraphEvidence(raw_text=raw_text, preserve_reason=preserve.reason)
+
+        para_detections = self.detect_in_element(para, raw_text)
+        if self.should_remove(para_detections):
+            chosen = max(
+                (
+                    d for d in para_detections
+                    if d.confidence >= 0.5
+                    and d.content_type != ContentType.INLINE_PLACEHOLDER
+                ),
+                key=lambda d: d.confidence,
+            )
+            return ParagraphEvidence(
+                raw_text=raw_text,
+                whole_category=chosen.content_type.value,
+                whole_reason=chosen.reason,
+                whole_formatting_only=chosen.formatting_only,
+            )
+
+        inline_spans, inline_reason = self._inline_evidence(para, raw_text, para_detections)
+
+        runs: list[RunEvidence] = []
+        offset = 0
+        for run in iter_own_runs(para):
+            text = run_text(run)
+            start, offset = offset, offset + len(text)
+            category = reason = None
+            formatting_only = False
+            if text.strip():
+                run_detections = self.detect_in_element(run, text)
+                if self.should_remove(run_detections):
+                    best = max(
+                        (
+                            d for d in run_detections
+                            if d.confidence >= 0.5
+                            and d.content_type != ContentType.INLINE_PLACEHOLDER
+                        ),
+                        key=lambda d: d.confidence,
+                    )
+                    category, reason = best.content_type.value, best.reason
+                    formatting_only = best.formatting_only
+            runs.append(RunEvidence(
+                start, offset, text, category, reason, formatting_only,
+                run_signature(run),
+            ))
+
+        return ParagraphEvidence(
+            raw_text=raw_text,
+            runs=tuple(runs),
+            inline_spans=tuple(inline_spans),
+            inline_reason=inline_reason,
+            offsets_reliable=(offset == len(raw_text)),
+        )
+
+    def _inline_evidence(
+        self,
+        para: etree._Element,
+        raw_text: str,
+        detections: list[Detection],
+    ) -> tuple[list[tuple[int, int]], str | None]:
+        """Placeholder intervals policy authorizes cutting out of ``para``.
+
+        A span straddling a page or column break is dropped, because the
+        processor refuses to cut one: claiming authority it declines to use
+        would report a paragraph it deliberately left alone as damage.
+        """
+        spans = [
+            span
+            for d in detections
+            if d.content_type == ContentType.INLINE_PLACEHOLDER and d.element == para
+            for span in d.spans
         ]
+        if not spans:
+            return [], None
 
-    def preserve_patterns(self) -> list[re.Pattern]:
-        """Compiled preserve patterns — content that must never be removed."""
+        breaks = layout_break_offsets(para)
+        kept = [
+            span for span in tidy_spans(raw_text, merge_spans(spans))
+            if not any(spans_cover([span], start, end) for start, end in breaks)
+        ]
+        if not kept:
+            return [], None
+
+        reasons = [
+            d.reason
+            for d in detections
+            if d.content_type == ContentType.INLINE_PLACEHOLDER and d.element == para
+        ]
+        return kept, "; ".join(dict.fromkeys(reasons)) or None
+
+    def preserve_style_names(self) -> frozenset[str]:
+        """Folded names of the styles that protect a paragraph outright."""
         if not self.preserve_detector.config.enabled:
-            return []
-        return self.preserve_detector.compiled_patterns
+            return frozenset()
+        return self.preserve_detector.folded_style_names
+

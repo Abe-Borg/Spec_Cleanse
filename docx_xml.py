@@ -280,6 +280,66 @@ def is_layout_break(node: etree._Element) -> bool:
     return (node.get(f"{W}type") or "") in LAYOUT_BREAK_TYPES
 
 
+def run_signature(run: etree._Element) -> tuple:
+    """A run's identity: its text and the formatting properties a reader sees.
+
+    Pure document fact — nothing here decides whether a run is editorial, and
+    no style resolution is involved.  The question it answers is narrower and
+    syntactic: are these two runs interchangeable?  Two runs with the same text
+    and the same properties are, and it does not matter which of them survived.
+
+    It exists because extracted text cannot always say *which* of two identical
+    occurrences a clean removed.  A hidden note followed by an identical visible
+    requirement extracts as the same characters twice, so an output holding one
+    copy is textually consistent with either having gone — and those two
+    outcomes are a correct clean and a lost requirement.
+    """
+    rpr = run.find(f"{W}rPr")
+    color = rpr.find(f"{W}color") if rpr is not None else None
+    rstyle = rpr.find(f"{W}rStyle") if rpr is not None else None
+    return (
+        run_text(run),
+        toggle_on(rpr, f"{W}vanish"),
+        toggle_on(rpr, f"{W}i"),
+        toggle_on(rpr, f"{W}b"),
+        color.get(f"{W}val") if color is not None else None,
+        rstyle.get(f"{W}val") if rstyle is not None else None,
+    )
+
+
+def paragraph_signature(para: etree._Element) -> tuple:
+    """Signatures of the runs in ``para`` that carry text, in document order.
+
+    Runs with no substantive text are left out: they carry structure rather
+    than content, and whether an empty one survives says nothing about whether
+    the document kept what it had to.
+    """
+    return tuple(
+        signature
+        for signature in (run_signature(run) for run in iter_own_runs(para))
+        if signature[0].strip()
+    )
+
+
+def layout_break_offsets(scope: etree._Element) -> list[tuple[int, int]]:
+    """Character ranges of the page and column breaks inside ``scope``.
+
+    Offsets are into the same text :func:`element_text` produces, so a span
+    computed against a paragraph's text can be tested against them directly.
+    Both the processor (which refuses to cut across one) and verification
+    (which must not then claim the cut was authorized) read this, so the two
+    cannot disagree about where a break sits.
+    """
+    offsets: list[tuple[int, int]] = []
+    offset = 0
+    for node, text in iter_text_nodes(scope):
+        start = offset
+        offset += len(text)
+        if is_layout_break(node):
+            offsets.append((start, offset))
+    return offsets
+
+
 def strip_text_leaves(elem: etree._Element) -> None:
     """Remove text-carrying leaves from ``elem``, keeping everything else.
 

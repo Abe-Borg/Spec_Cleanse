@@ -30,6 +30,7 @@ from docx_xml import (
     iter_own_runs,
     iter_paragraphs,
     iter_text_nodes,
+    layout_break_offsets,
     load_styles,
     merge_spans,
     orphaned_range_markers,
@@ -309,7 +310,7 @@ class DocxProcessor:
         So the placeholder is left where it stands and the reason is recorded.
         The editorial text survives, which is the lesser cost.
         """
-        breaks = self._layout_break_offsets(para)
+        breaks = layout_break_offsets(para)
         if not breaks:
             return spans
 
@@ -324,18 +325,6 @@ class DocxProcessor:
                 continue
             kept.append(span)
         return kept
-
-    @staticmethod
-    def _layout_break_offsets(para: etree._Element) -> list[tuple[int, int]]:
-        """Character ranges of this paragraph's page and column breaks."""
-        offsets: list[tuple[int, int]] = []
-        offset = 0
-        for node, text in iter_text_nodes(para):
-            start = offset
-            offset += len(text)
-            if is_layout_break(node):
-                offsets.append((start, offset))
-        return offsets
 
     def _group_run_detections(
         self, para: etree._Element, detections: list[Detection]

@@ -22,9 +22,9 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 |--------|---------|
 | `gui.py` | Tkinter GUI — entry point, runs preview/clean in a background thread, manages logging and progress |
 | `batch.py` | Destination planning and collision rules, plus `FileOutcome`. Deliberately free of Tk so the rules are testable where `tkinter` is absent. Case folding is decided per *volume*, not per platform — `normcase` answers the wrong question, since a default macOS APFS volume ignores case while `posixpath.normcase` is the identity |
-| `detection.py` | Pattern matching engine with confidence scoring; all detector classes |
+| `detection.py` | Pattern matching engine with confidence scoring; all detector classes; and `paragraph_evidence()`, which states what policy permits losing from a source paragraph |
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
-| `verify.py` | Post-processing verification: removals, modifications, structural lint |
+| `verify.py` | Post-processing verification: comparison and classification against the source evidence — removals, modifications, structural lint |
 | `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
 | `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
@@ -83,8 +83,8 @@ To add a new detector:
 2. Create a detector class in `detection.py` extending `BaseDetector`
 3. Register it in `DetectionEngine._create_detectors()`
 
-Verification derives its categories from `DetectionEngine.removal_patterns()`, so a
-new detector's patterns are recognised there without a second registration.
+Verification derives its categories from `DetectionEngine.paragraph_evidence()`, so a
+new detector's decisions are recognised there without a second registration.
 
 ### Confidence Scoring
 
@@ -125,18 +125,18 @@ formatting signal to cross the threshold; `inline_patterns` produce
 out of the paragraph in place. `DetectionEngine.should_remove()` ignores inline
 detections — they never remove their element.
 
-The inline tier must stay separable when *judging* a removal, which is why
-`removal_patterns()` takes `include_inline`. An inline pattern matching a paragraph
-that vanished entirely means only that the paragraph contained a placeholder — never
-that losing it was intended. Verification asks the narrower question instead: does
-cutting every placeholder leave nothing behind?
+The inline tier must stay separable when *judging* a removal. An inline pattern
+matching a paragraph that vanished entirely means only that the paragraph contained a
+placeholder — never that losing it was intended. So inline matches enter the evidence
+as *intervals*, never as whole-paragraph authority, and a paragraph is explained by
+them only when they cover all of its substantive text.
 
 ### Pairing an Input Paragraph With Its Survivor
 
 `_pair_with_survivor()` takes exact answers before guessing. An unchanged paragraph
-pairs outright; so does one matching `_expected_after_redaction()`, which computes
-from the source text and the configured patterns — never from anything the processor
-reports — what the paragraph becomes when every authorized placeholder is cut.
+pairs outright; so does one matching `ParagraphInfo.expected_after_redaction()`, which
+computes from the source text and the configured patterns — never from anything the
+processor reports — what the paragraph becomes when every authorized placeholder is cut.
 
 Only when no exact answer exists does `MIN_PAIR_SIMILARITY` apply. That threshold
 reads as "about half the characters survived" and is not: for a pure deletion the
@@ -145,10 +145,103 @@ than two-thirds* of the characters go. It therefore rejected exactly the redacti
 that worked best, which is the bug the exact path fixes.
 
 Recognising the exact result does not widen what counts as permitted — anything
-other than that text still faces the similarity path unchanged. In particular, a
-fragment classification that asks whether a lost fragment *contains* a pattern match
-rather than whether matches *cover* it is a separate, still-open defect; the
-`unittest.expectedFailure` case in `tests/test_verify.py` pins it.
+other than that text still faces the similarity path unchanged, and whatever it lost
+still has to be covered by an authorized interval before it counts as expected.
+
+### The Verification Contract: Source Evidence
+
+Verification asks what the *configured policy* permits losing from the *source*
+document, then checks the actual output against that. It never asks the processor
+what it did. The cleaner's account of its own work cannot be the evidence that the
+work was right — a bug in the processor would report itself as intended.
+
+`DetectionEngine.paragraph_evidence(para)` produces that evidence for one source
+paragraph, in the processor's decision order: preserve, then a whole-paragraph rule,
+then placeholder intervals, then individual runs. It is a pure read — no mutation,
+no processor call.
+
+The distinction it carries, and that a flattened list of `(category, regex)` pairs
+could not, is **scope**:
+
+| Evidence | Authorizes |
+|---|---|
+| `preserve_reason` | nothing — the paragraph is protected outright, by pattern *or* by style |
+| an accepted tracked deletion | losing the paragraph, outranking even protection — see below |
+| `whole_category` | losing the entire paragraph, because a rule qualified against the paragraph |
+| `runs[i]` with a category | losing *that run's own characters*, and nothing beside them |
+| `inline_spans` | losing those intervals |
+
+Three consequences follow, and each closed a real defect:
+
+- **One editorial signal inside a paragraph is not permission to lose the
+  paragraph.** A hidden note run beside a requirement authorizes its own text.
+  Whole-paragraph loss needs either a qualifying whole-paragraph rule or
+  `covers_all_text()` — the authorized intervals accounting for every substantive
+  character.
+- **The low-confidence tier carries its formatting prerequisite.** It arrived at
+  verification as a bare regex, so `Provide pumps and revise as required.` — which
+  the cleaner leaves alone, because 0.3 does not reach the threshold — was reported
+  as an expected removal when something else deleted it.
+- **Authority is positional, not textual.** `authority_for(start, end)` asks which
+  rule covers an interval. Asking whether a lost fragment *resembles* something
+  removable cannot tell two identical occurrences apart, and a paragraph may hold
+  the same words in a hidden run and in a requirement.
+
+Coverage is also what `_classify_modification` requires: every lost interval must be
+**covered by** an authorized one, not merely *contain* something that matches a rule.
+`[Verify quantity]` authorizes cutting the placeholder and says nothing about the
+word `spare` beside it.
+
+**Repeated identical text breaks the alignment the intervals rest on, so one exact
+answer comes first.** A hidden note followed by an identical visible requirement
+extracts the same characters twice. When the cleaner removes the note, the survivor is
+equally consistent with *either* occurrence having gone, and `SequenceMatcher` simply
+picks the first — leaving the second interval unauthorized and a correct clean reported
+as damage.
+
+No rule reading text alone can fix this, because the correct clean and the
+corresponding damage produce **byte-identical text**; the difference is only which run
+survived. So `ParagraphEvidence.surviving_signature()` states the runs a correct clean
+would leave behind, and `docx_xml.paragraph_signature()` reads what the output actually
+has. Signatures are pure document fact — text plus raw `w:rPr` properties, no style
+resolution and no policy — because the question is narrow and syntactic: *are these two
+runs interchangeable?*
+
+Reading the output's structure is not a breach of the boundary above. What is forbidden
+is trusting the processor's account of its actions; the output package is the artifact
+being judged, and §10.3 requires establishing whether it "retains all protected content
+in order".
+
+**That path only ever accepts.** A mismatch falls through to the interval reasoning
+unchanged, so an output that kept the *hidden* copy while the visible requirement
+vanished is still reported. A paragraph whose runs were legitimately reshaped — an
+inline redaction rewrites run text — simply misses the fast path rather than being newly
+flagged.
+
+A protected paragraph is not touched by the cleaner at all — not redacted, not
+trimmed — so any loss inside one is a violation whatever the lost text looks like,
+judged on the original paragraph where the protection is visible.
+
+**One thing outranks protection: an explicit tracked deletion, and only while
+`strip_revisions` is on.** A preserved heading inside a row the author deleted is
+that deletion working, not damage — the run was asked to accept revisions. The
+extent is validated rather than assumed: `_in_tracked_deletion` requires the marker
+on the enclosing `w:tr` or `w:tc`, so a revision somewhere nearby is not blanket
+permission. With the option off the authority does not exist, and the same loss is
+a violation again.
+
+**Two places mirror the processor's decision order, on purpose, for different
+questions.** `tools/actions.py` asks the processor's own methods what it *would do*,
+because a measurement must match the build being measured. `paragraph_evidence()`
+asks the policy what is *permitted*, and deliberately never consults the processor,
+because that is the independence the contract rests on. `tests/test_evidence.py`
+pins the second against real cleans, so the two cannot drift apart unnoticed.
+
+Offsets are into the **raw** paragraph text. A `ParagraphInfo` keeps `raw_text` and
+`text` (trimmed, what the comparison aligns on) separately, and `lead` maps between
+them. An offset computed against a trimmed or normalized string addresses the wrong
+characters. `offsets_reliable` is `False` if run texts ever fail to reconstruct the
+paragraph, and interval reasoning is then abandoned rather than guessed at.
 
 ### Dataclass-Based Results
 
@@ -163,7 +256,12 @@ Processing results are communicated via dataclasses, not exceptions:
   cannot carry both; `_clean_one()` returns this, never a bool
 - `BatchPlan` / `BatchItem` / `BatchConflict` — the validated input/output pairs for
   a run, built before anything is opened
-- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a pattern name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained
+- `RunEvidence` / `ParagraphEvidence` — what policy permits losing from one *source*
+  paragraph, read from the source alone. `RunEvidence` carries offsets into the raw
+  paragraph text; `ParagraphEvidence` carries whole-paragraph authority, placeholder
+  intervals, and the preserve reason. This is the type that replaced a flattened list
+  of `(category, regex)` pairs, and *scope* is the thing it carries that the list could not
+- `RemovedParagraph` / `ModifiedParagraph` / `StructuralViolation` / `VerificationResult` — verification output. Categories: a detector name, `formatting_based`, `inline_placeholder`, `tracked_deletion`, `preserve_violation`, or `None` for unexplained
 - `StyleInfo` / `StyleIndex` — `word/styles.xml` resolved for name and `w:basedOn` matching
 
 Errors accumulate in result objects; processing doesn't halt on non-fatal issues.
@@ -332,6 +430,21 @@ python -m unittest discover -s tests -t .
 
 Stdlib `unittest`, no new dependency. `tests/docx_builder.py` assembles synthetic `.docx` files with `zipfile`, so structural cases — a sole paragraph in a footer, a cell that would stop ending with a paragraph, a `w:sectPr` paragraph, an unbalanced field — are covered without binary fixtures. `tests/support.py` provides `DocxTestCase` with `build()`, `clean()`, `detect()`, and parsed-XML assertions. GUI tests skip where `tkinter` is unavailable.
 
+Two suites carry the verification contract, and they ask opposite questions:
+
+- `tests/test_evidence.py` cleans each case **for real** and checks that the evidence
+  read from the source predicted the output. It is the anti-drift guard: if
+  `paragraph_evidence()` and the processor ever disagree, verification has become a
+  second opinion about a different program.
+- `tests/test_verify.py`'s `InjectedDamageTests` builds source and damaged output
+  **independently, never by running the cleaner**, because agreement between a broken
+  verifier and the cleaner that produced its input proves nothing. Each case carries an
+  anchor paragraph present on both sides — substituting a placeholder would make the
+  case fail on the invented text no matter how the loss was classified, and a tripwire
+  that fires for the wrong reason is not a tripwire. V09 is the false-alarm guard: it
+  asserts a *correct* clean still passes, which is what stops the contract being
+  satisfied by a verifier that simply distrusts everything.
+
 Add a test whenever you touch removal safety, the pattern tiers, or verification classification.
 
 Two conventions matter here:
@@ -348,8 +461,12 @@ Two conventions matter here:
   anything, and hides real regressions. The decorator keeps the suite green while the
   defect stands and turns it red — `unexpected successes=1`, exit code 1 — the moment
   the behaviour changes, so the tripwire fires in both directions and the decorator
-  cannot be forgotten. `tests/test_shipped_policy.py` and the V04 case in
-  `tests/test_verify.py` both use it; each docstring names the package that closes it.
+  cannot be forgotten. `tests/test_shipped_policy.py` describes how its fixtures were
+  carried this way until W02 narrowed the rules, and the V04 case in
+  `tests/test_verify.py` how it was carried until W03 replaced the containment
+  predicate with interval coverage. Both reported the unexpected success that said the
+  decorator could go. No case currently carries one — when you add one, its docstring
+  names the package that closes it.
 - **A measurement tool is held to the same standard as the code it measures.**
   Everything under `tools/` is tested, because a wrong number is what a decision
   gets taken on. Two traps, both of which produced real bugs here:
@@ -444,7 +561,7 @@ bundle, which the suite simulates by patching `sys.frozen` and `sys._MEIPASS`.
 3. Register it in `DetectionEngine._create_detectors()`
 4. Add corresponding patterns to `patterns.yaml`
 
-Verification picks the category up automatically from `DetectionEngine.removal_patterns()`.
+Verification picks the category up automatically from `DetectionEngine.paragraph_evidence()`.
 
 ### Adding an Inline Placeholder
 
