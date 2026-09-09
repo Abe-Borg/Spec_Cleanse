@@ -171,7 +171,10 @@ def _clean_one(
     if not result.success:
         for err in result.errors:
             log(f"  ERROR: {err}")
-        return FileReport(FileOutcome.FAILED, output_written=output_path.exists())
+        # `result.wrote_output`, not `output_path.exists()`: a destination left
+        # by an earlier good run is there either way, and calling it this run's
+        # unverified output invites the user to delete a fine document.
+        return FileReport(FileOutcome.FAILED, output_written=result.wrote_output)
 
     removed, redacted, preserved = _group_detections(result.detections)
     log(f"    Removed {sum(len(v) for v in removed.values())} items,"
@@ -193,10 +196,9 @@ def _clean_one(
         # produced would be false, and hiding the path would leave an
         # unverified document sitting in the output folder unannounced.
         log(f"  FAILED: the output could not be verified: {exc}")
-        written = output_path.exists()
-        if written:
+        if result.wrote_output:
             log(f"  The cleaned file was written but is UNVERIFIED: {output_path}")
-        return FileReport(FileOutcome.FAILED, output_written=written)
+        return FileReport(FileOutcome.FAILED, output_written=result.wrote_output)
 
     _log_verification(vresult, log)
 
@@ -210,7 +212,7 @@ def _clean_one(
     # category to match: a real failure would report Verified.  A test asserts
     # the two agree.
     if vresult.passed and not configuration_notice:
-        return FileReport(FileOutcome.VERIFIED, output_written=True)
+        return FileReport(FileOutcome.VERIFIED, output_written=result.wrote_output)
 
     categories = vresult.review_categories()
     if configuration_notice:
@@ -227,7 +229,8 @@ def _clean_one(
     log(f"  NEEDS REVIEW ({named})"
         f" — the cleaned file was written: {output_path}")
     return FileReport(
-        FileOutcome.NEEDS_REVIEW, frozenset(categories), output_written=True
+        FileOutcome.NEEDS_REVIEW, frozenset(categories),
+        output_written=result.wrote_output,
     )
 
 

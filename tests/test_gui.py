@@ -228,5 +228,34 @@ class WorkerTests(DocxTestCase):
                 )
 
 
+    def test_an_earlier_output_is_not_reported_as_this_run_writing(self):
+        # A destination left by an earlier good run exists whether or not this
+        # run wrote anything.  Reporting it as this run's unverified output is
+        # an invitation to delete a document that is perfectly fine.
+        out = self.temp_dir / "spec_cleaned.docx"
+        out.write_bytes(b"a perfectly good earlier output")
+        bad = self.temp_dir / "spec.docx"
+        bad.write_bytes(b"this is not a zip")
+
+        outcome = gui._clean_one(bad, out, self.make_engine(), self.log)
+
+        self.assertIs(outcome.outcome, FileOutcome.FAILED)
+        self.assertFalse(outcome.output_written)
+        self.assertNotIn("UNVERIFIED", self.output)
+        self.assertEqual(out.read_bytes(), b"a perfectly good earlier output")
+
+    def test_a_write_this_run_did_make_is_still_reported(self):
+        # The guard against the case above being satisfied by never reporting a
+        # write at all.
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+
+        with patch.object(gui, "verify_clean", side_effect=RuntimeError("boom")):
+            outcome = gui._clean_one(path, out, self.make_engine(), self.log)
+
+        self.assertTrue(outcome.output_written)
+        self.assertIn("UNVERIFIED", self.output)
+
+
 if __name__ == "__main__":
     unittest.main()

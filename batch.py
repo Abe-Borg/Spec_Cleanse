@@ -408,6 +408,13 @@ def run_batch(
     already turns its own exceptions into errors, so this guard is for
     everything around it — without it a single bad file ended the batch, and
     every remaining file went unprocessed with no record of why.
+
+    When the callback raises there is no result to ask, so the destination is
+    checked *before* the call as well as after.  Only a file that appeared is
+    this run's; one that was already there is an earlier run's output and is
+    reported as such.  Inferring a write from the file merely existing
+    afterwards would tell the user their good document is unverified, which is
+    an invitation to delete it.
     """
     tally = RunTally()
     total = len(items)
@@ -417,16 +424,23 @@ def run_batch(
             announce(index, total, item)
         log(f"[{index}/{total}] {item.source.name}")
 
+        existed = item.destination.exists()
         try:
             report = clean(item)
         except Exception as exc:
             # Nothing below the callback is trusted to have reported this.
-            report = FileReport(
-                FileOutcome.FAILED, output_written=item.destination.exists()
-            )
+            appeared = not existed and item.destination.exists()
+            report = FileReport(FileOutcome.FAILED, output_written=appeared)
             log(f"  ERROR: {item.source.name} could not be processed: {exc}")
-            if report.output_written:
+            if appeared:
                 log(f"  A file was left behind and is UNVERIFIED: {item.destination}")
+            elif existed:
+                # Deliberately not counted as this run's output.  Whether the
+                # run got as far as overwriting it is unknowable from here, and
+                # the safe reading is the one that does not call an existing
+                # document unverified.
+                log(f"  {item.destination.name} was already there before this run;"
+                    " it may be an earlier output and was not checked.")
 
         tally.add(report)
         if report.output_written and report.outcome is not FileOutcome.FAILED:

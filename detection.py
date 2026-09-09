@@ -731,6 +731,18 @@ SUPERSEDED_PATTERNS: dict[str, dict[str, str]] = {
 }
 
 
+def _section_enabled(config: dict, section: str) -> bool:
+    """Whether the engine will consult this section's detector at all.
+
+    Every detector short-circuits on ``self.config.enabled``, so a rule under a
+    disabled section cannot reach any output.  A notice about one would be a
+    warning about something that provably did not happen — and since a notice
+    now makes every file in a run need review, it would be that warning
+    repeated over the whole batch.
+    """
+    return config.get(section, {}).get("enabled", True)
+
+
 def config_notices(config: dict) -> list[str]:
     """What is worth saying about the configuration actually being used.
 
@@ -738,10 +750,16 @@ def config_notices(config: dict) -> list[str]:
     These are the two things a user running an older ``patterns.yaml`` cannot
     otherwise tell: that a rule known to delete requirements is still active,
     and that removal on formatting alone is switched on.
+
+    Only sections the engine actually consults are reported.  "Still active"
+    has to mean active: a superseded pattern under ``enabled: false`` is text
+    in a file that nothing reads.
     """
     notices: list[str] = []
 
     for section, superseded in SUPERSEDED_PATTERNS.items():
+        if not _section_enabled(config, section):
+            continue
         active = config.get(section, {}).get("text_patterns", []) or []
         for pattern in active:
             if pattern in superseded:
@@ -752,7 +770,10 @@ def config_notices(config: dict) -> list[str]:
                     f"to pick the change up; your edits are never overwritten."
                 )
 
-    if config.get("specifier_notes", {}).get("formatting_only_removal", False):
+    if (
+        _section_enabled(config, "specifier_notes")
+        and config.get("specifier_notes", {}).get("formatting_only_removal", False)
+    ):
         notices.append(
             "specifier_notes.formatting_only_removal is on, so text is removed "
             "on italic-plus-editorial-colour alone, with no pattern or style "

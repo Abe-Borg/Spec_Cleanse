@@ -360,19 +360,6 @@ class RunBatchTests(unittest.TestCase):
         self.assertIn("unreadable", self.output)
         self.assertIn("[3/3] c.docx", self.output)
 
-    def test_a_failure_that_left_a_file_behind_is_reported_as_such(self):
-        item = self.item("a")
-        item.destination.write_bytes(b"half a document")
-
-        tally = run_batch(
-            [item], lambda _: (_ for _ in ()).throw(RuntimeError("boom")), self.lines.append
-        )
-
-        self.assertEqual(tally.unverified_outputs, 1)
-        self.assertIn("UNVERIFIED", self.output)
-        self.assertIn(str(item.destination), self.output)
-        self.assertEqual(tally.summary(), "Done: 1 failed (1 wrote an unverified file)")
-
     def test_a_failure_that_wrote_nothing_is_not_counted_as_unverified(self):
         tally = run_batch(
             [self.item("a")],
@@ -420,3 +407,39 @@ class RunBatchTests(unittest.TestCase):
 
         self.assertEqual(tally.summary(), "Done: no files processed")
         self.assertEqual(self.lines, [])
+
+    def test_a_pre_existing_destination_is_not_called_this_run_s_output(self):
+        # No result to ask when the callback raises, so the destination is
+        # checked before the call as well as after.  A file that was already
+        # there is an earlier run's, and calling it unverified would invite the
+        # user to delete a good document.
+        item = self.item("a")
+        item.destination.write_bytes(b"a perfectly good earlier output")
+
+        tally = run_batch(
+            [item],
+            lambda _: (_ for _ in ()).throw(RuntimeError("boom")),
+            self.lines.append,
+        )
+
+        self.assertEqual(tally.unverified_outputs, 0)
+        self.assertNotIn("UNVERIFIED", self.output)
+        self.assertIn("was already there before this run", self.output)
+        self.assertEqual(tally.summary(), "Done: 1 failed")
+
+    def test_a_file_that_appeared_during_a_failed_run_is_reported(self):
+        # The guard against the case above being satisfied by never reporting
+        # an unverified output at all.
+        item = self.item("a")
+
+        def clean(i: BatchItem) -> FileReport:
+            i.destination.write_bytes(b"half a document")
+            raise RuntimeError("boom")
+
+        tally = run_batch([item], clean, self.lines.append)
+
+        self.assertEqual(tally.unverified_outputs, 1)
+        self.assertIn("UNVERIFIED", self.output)
+        self.assertIn(str(item.destination), self.output)
+        self.assertEqual(tally.summary(), "Done: 1 failed (1 wrote an unverified file)")
+

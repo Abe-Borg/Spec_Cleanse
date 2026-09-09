@@ -89,6 +89,12 @@ class ProcessingResult:
     #: kept because removing it would have gone beyond removing content.
     #: Deliberately separate from ``errors``, which decide ``success``.
     warnings: list[str] = field(default_factory=list)
+    #: True once this run has actually repacked ``output_path``.  Recorded, not
+    #: inferred from the file being there afterwards: a destination left by an
+    #: earlier good run exists whether or not this one wrote anything, and
+    #: reporting that file as this run's unverified output invites a user to
+    #: delete a document that is perfectly fine.
+    wrote_output: bool = False
 
     @property
     def success(self) -> bool:
@@ -172,6 +178,7 @@ class DocxProcessor:
                 # Repack
                 if not self.dry_run:
                     repack_docx(unpacked_dir, output_path)
+                    result.wrote_output = True
 
             finally:
                 # Cleanup temp directory
