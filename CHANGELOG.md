@@ -7,7 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Rules that were deleting real requirement text have been narrowed. Three
+  copyright patterns (`may not be reproduced`, `duplication.*?prohibited`,
+  `unauthorized.*?reproduction`) matched ordinary specification prose;
+  reproduction and duplication language is not by itself a copyright notice, so
+  the narrowed forms require either an unambiguous marker or the boilerplate
+  clause a notice actually uses, with bounded gaps that keep the words adjacent.
+  `select one` now requires an editorial referent — above, below, following,
+  paragraph, option, article — so "Select one of the following paragraphs" is
+  cleaned and "Select one of the listed manufacturers" is not. `retain or
+  delete` is anchored to the start of the paragraph, so it fires when the
+  paragraph *is* the instruction rather than when a requirement contains the
+  marker. The SpecAgent pattern gained word boundaries.
+
+  More editorial text survives as a result. That is the intended trade: a
+  retained note costs noise in whatever reads the cleaned file, a deleted
+  requirement is not recoverable from it.
+- **`specifier_notes.formatting_only_removal` now defaults to `false`.** It is
+  the only mechanism that removes text on no content evidence at all — no
+  pattern, no style, only italic plus an editorial colour — and specification
+  text is routinely red and italic where a decision is pending. The opt-in still
+  works, is still labelled `formatting-only` in Preview, and
+  `tools/census_formatting` reports what the setting is worth on real documents.
+
+  **This was a judgement call, not a measurement.** No specification corpus was
+  available, so Census A was never run against real files; the decision rests on
+  the asymmetric cost of the two errors. Anyone with documents to hand can check
+  it in one command and set the switch accordingly.
+
 ### Added
+
+- `detection.config_notices()`, reported in the GUI log at startup. `patterns.yaml`
+  beside the executable or under `%APPDATA%` is never overwritten by an update, so
+  a copy made before a rule was narrowed keeps the broad version and nothing
+  otherwise says so. Flags any superseded shipped rule still active, naming the
+  requirement it used to delete, and flags formatting-only removal being on.
+  Matched on the exact prior string, so an edited rule is left alone.
 
 - `.github/workflows/tests.yml` runs the suite on every pull request and every
   push to `master`, in two lanes: Windows on Python 3.12, the version the

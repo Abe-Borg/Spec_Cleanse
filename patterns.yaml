@@ -24,11 +24,21 @@ specifier_notes:
     - '^\s*\*\*\*.*?\*\*\*\s*$'         # *** specifier notes ***
 
   # Remove text that carries editorial formatting (italic plus an editorial
-  # colour) even when no pattern matches it.  Some firms mark their notes
-  # only that way, so this is on by default — but real specification content
-  # can also be red and italic, so turn it off if it starts eating content.
-  # Such removals are labelled "formatting-only" in the Preview report.
-  formatting_only_removal: true
+  # colour) even when no pattern matches it.
+  #
+  # OFF by default.  This is the only mechanism in the tool that removes text
+  # on no content evidence at all — no pattern, no style, only how the text
+  # looks — and specification content is routinely red and italic where a
+  # decision is still pending.  A retained note costs some noise in whatever
+  # reads the cleaned file; a deleted requirement is not recoverable from it.
+  #
+  # Turn it on if your firm marks notes *only* by italic-plus-colour and
+  # nothing else distinguishes them.  Removals it causes are labelled
+  # "formatting-only" in the Preview report, and
+  #   python -m tools.census_formatting <your specs>
+  # reports what the setting is worth on your own documents, in both
+  # directions, without changing anything.
+  formatting_only_removal: false
 
   # Formatting indicators (if text has these, increase confidence)
   formatting_signals:

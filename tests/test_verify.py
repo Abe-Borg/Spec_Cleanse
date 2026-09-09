@@ -70,7 +70,7 @@ class ClassificationTests(DocxTestCase):
             db.text_para("Real requirement."),
             db.para(db.run("Coordinate with structural.", italic=True, color="FF0000")),
         ))
-        engine = self.make_engine()
+        engine = self.make_engine(specifier_notes={"formatting_only_removal": True})
         _, out = self.clean(path, engine)
         result = verify_clean(path, out, engine=engine)
 
@@ -144,7 +144,8 @@ class ClassificationTests(DocxTestCase):
         cleaned = self.build(
             db.document(db.text_para("Keep this.")), name="hand_cleaned.docx"
         )
-        result = verify_clean(source, cleaned, engine=self.make_engine())
+        engine = self.make_engine(specifier_notes={"formatting_only_removal": True})
+        result = verify_clean(source, cleaned, engine=engine)
 
         self.assertEqual(len(result.expected_modifications), 1, result.modified)
         self.assertTrue(result.passed)

@@ -239,7 +239,13 @@ class PatternPrecisionTests(DocxTestCase):
 
 
 class FormattingOnlySwitchTests(DocxTestCase):
-    """specifier_notes.formatting_only_removal decides whether looks are enough."""
+    """specifier_notes.formatting_only_removal decides whether looks are enough.
+
+    Off by default: it is the only mechanism that removes text on no content
+    evidence at all, and specification content is routinely red and italic
+    where a decision is pending. Every test here states the setting it means,
+    rather than leaning on whichever way the default happens to point.
+    """
 
     DOC = None
 
@@ -249,13 +255,24 @@ class FormattingOnlySwitchTests(DocxTestCase):
             db.para(db.run("Coordinate hangers with structural.", italic=True, color="FF0000")),
         )
 
-    def test_on_by_default_removes_italic_editorial_colour(self):
+    def test_off_by_default_keeps_italic_editorial_colour(self):
         path = self.build(self._document())
         _, out = self.clean(path)
 
+        self.assertEqual(
+            self.paragraph_texts(out),
+            ["Real requirement text.", "Coordinate hangers with structural."],
+        )
+
+    def test_the_opt_in_removes_it(self):
+        path = self.build(self._document())
+        _, out = self.clean(
+            path, specifier_notes={"formatting_only_removal": True}
+        )
+
         self.assertEqual(self.paragraph_texts(out), ["Real requirement text."])
 
-    def test_off_keeps_it(self):
+    def test_an_explicit_false_matches_the_default(self):
         path = self.build(self._document())
         _, out = self.clean(
             path, specifier_notes={"formatting_only_removal": False}
@@ -277,9 +294,11 @@ class FormattingOnlySwitchTests(DocxTestCase):
 
         self.assertEqual(self.paragraph_texts(out), ["Real requirement text."])
 
-    def test_removal_is_labelled_formatting_only(self):
+    def test_the_opt_in_labels_what_it_removed(self):
         path = self.build(self._document())
-        detections = self.detect(path)
+        detections = self.detect(
+            path, specifier_notes={"formatting_only_removal": True}
+        )
         flagged = [d for d in detections if d.formatting_only]
 
         self.assertEqual(len(flagged), 1)

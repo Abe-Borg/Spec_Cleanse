@@ -570,7 +570,7 @@ def verify_clean(
     inline_patterns = engine.inline_patterns()
     preserve_patterns = engine.preserve_patterns()
     trust_formatting_only = config.get("specifier_notes", {}).get(
-        "formatting_only_removal", True
+        "formatting_only_removal", False
     )
 
     input_paras = extract_paragraphs(input_path, config)
