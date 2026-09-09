@@ -103,14 +103,20 @@ def volume_ignores_case(path: Path) -> bool:
 def _key(path: Path, fold_case: bool) -> str:
     """A comparison key under which two spellings of one file are equal.
 
-    ``normcase`` folds separators on Windows (and case, there, already);
-    ``realpath`` resolves symlinks, ``.`` and ``..`` segments, and relative
-    spellings, and for a path that does not exist yet it still normalises the
-    part of it that does. ``fold_case`` supplies what ``normcase`` cannot: the
-    answer for the volume this path is actually on.
+    ``realpath`` resolves symlinks, ``.`` and ``..`` segments and relative
+    spellings, normalises separators, and for a path that does not exist yet
+    still normalises the part of it that does.
+
+    Case is folded on ``fold_case`` alone. ``normcase`` is deliberately not
+    used here: it would fold case a second time, from the platform's
+    convention, and the two can disagree — a case-sensitive directory on
+    Windows would still have been folded, and no volume answer could have
+    stopped it. One rule, and the volume states it (see
+    :func:`volume_ignores_case`, whose fallback is the platform's convention
+    when there is nothing to probe).
     """
-    normalised = os.path.normcase(os.path.realpath(path))
-    return normalised.lower() if fold_case else normalised
+    resolved = os.path.realpath(path)
+    return resolved.lower() if fold_case else resolved
 
 
 class _Keyer:

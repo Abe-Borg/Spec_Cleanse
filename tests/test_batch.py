@@ -4,7 +4,6 @@ These run everywhere.  The rules they cover used to live in ``gui.py``, where
 no Linux run could reach them.
 """
 
-import os
 import shutil
 import tempfile
 import unittest
@@ -84,37 +83,14 @@ class PlanBatchTests(unittest.TestCase):
 
         self.assertTrue(plan.ok)
 
-    def test_case_only_collision_is_rejected_where_case_does_not_distinguish(self):
-        # normcase folds case on Windows and is identity on POSIX, so this
-        # patch runs the Windows rule on any host.  Two files that differ only
-        # in case are one file there, and one of the cleans would be lost.
-        with patch("os.path.normcase", str.lower):
-            plan = plan_batch(
-                [Path("/proj/A/Spec.docx"), Path("/proj/B/SPEC.docx")],
-                Path("/out"),
-            )
+    # The volume decides whether case matters, so these read the same on every
+    # host.  Patching os.path.normcase would not: it is no longer a case knob,
+    # and asserting anything about it fails wherever the platform disagrees.
 
-        self.assertFalse(plan.ok)
-        self.assertEqual(plan.conflicts[0].kind, "shared_destination")
-
-    def test_case_only_names_are_distinct_where_case_distinguishes(self):
-        # The same two files on a case-sensitive filesystem are two files.
-        with patch("os.path.normcase", lambda value: value):
-            plan = plan_batch(
-                [Path("/proj/A/Spec.docx"), Path("/proj/B/SPEC.docx")],
-                Path("/out"),
-            )
-
-        self.assertTrue(plan.ok)
-
-    def test_case_only_collision_is_caught_on_a_case_insensitive_posix_volume(self):
-        # The platform and the volume answer different questions.  A default
-        # macOS APFS volume ignores case while posixpath.normcase is the
-        # identity, so normcase alone would call these two files and let the
-        # second clean replace the first.
-        self.assertEqual(os.path.normcase("Spec.docx"), "Spec.docx",
-                         "this test is only meaningful where normcase is identity")
-
+    def test_case_only_collision_is_rejected_on_a_case_insensitive_volume(self):
+        # Two files differing only in case are one file there, and one of the
+        # cleans would be lost.  A default macOS APFS volume is this case, and
+        # posixpath.normcase cannot see it — which is why the volume is asked.
         with patch.object(batch, "volume_ignores_case", return_value=True):
             plan = plan_batch(
                 [Path("/proj/A/Spec.docx"), Path("/proj/B/SPEC.docx")],
@@ -243,9 +219,10 @@ class ExistingPathTests(unittest.TestCase):
         )
 
     def test_the_volume_probe_falls_back_to_the_platform_when_nothing_exists(self):
+        # Nothing to probe, so the platform's convention is the answer.
         answer = volume_ignores_case(Path("/nonexistent-root-xyz/deep/path"))
 
-        self.assertEqual(answer, os.path.normcase("A") == "a")
+        self.assertEqual(answer, batch._PLATFORM_IGNORES_CASE)
 
 
 class SummariseTests(unittest.TestCase):
