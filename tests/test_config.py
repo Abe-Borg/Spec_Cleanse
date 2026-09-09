@@ -4,10 +4,12 @@ import unittest
 from pathlib import Path
 
 import yaml
+from lxml import etree
 
 from detection import SUPERSEDED_PATTERNS, DetectionEngine, config_notices
-from docx_xml import load_config
+from docx_xml import W_NS, load_config
 
+from tests import docx_builder as db
 from tests.support import CONFIG_PATH, DocxTestCase
 
 
@@ -95,9 +97,120 @@ class ConfigValidationTests(DocxTestCase):
     def test_shipped_config_is_valid(self):
         DetectionEngine(load_config(CONFIG_PATH))
 
+    # -- Boolean switches ---------------------------------------------------
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_a_quoted_false_is_refused_rather_than_read_as_true(self):
+        # The one that matters most: every reader asks a plain truthiness
+        # question, so the string 'false' switches formatting-only removal ON —
+        # the only path that removes text on no content evidence — for someone
+        # who wrote that it should be off.
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            load_config(self._write(
+                "specifier_notes:\n  formatting_only_removal: 'false'\n"
+            ))
+
+    def test_a_quoted_false_enabled_is_refused_too(self):
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            load_config(self._write("specifier_notes:\n  enabled: 'false'\n"))
+
+    def test_a_number_is_not_a_boolean(self):
+        with self.assertRaisesRegex(ValueError, "must be true or false"):
+            load_config(self._write("specifier_notes:\n  formatting_only_removal: 1\n"))
+
+    def test_a_real_boolean_is_accepted(self):
+        # The guard against the cases above being satisfied by refusing
+        # everything.
+        config = load_config(self._write(
+            "specifier_notes:\n  enabled: false\n  formatting_only_removal: true\n"
+        ))
+        self.assertIs(config["specifier_notes"]["enabled"], False)
+        self.assertIs(config["specifier_notes"]["formatting_only_removal"], True)
+
+    def test_the_message_says_why_quoting_broke_it(self):
+        with self.assertRaises(ValueError) as caught:
+            load_config(self._write("specifier_notes:\n  enabled: 'no'\n"))
+        self.assertIn("string", str(caught.exception))
+
+    # -- Editorial colours --------------------------------------------------
+
+    def test_a_leading_hash_is_normalised_rather_than_rejected(self):
+        # One possible meaning, and it is how every other tool writes a hex
+        # colour.  Rejecting it would be defensible; silently matching nothing
+        # is not, which is what happened before.
+        config = load_config(self._write(
+            "specifier_notes:\n  formatting_signals:\n    colors: ['#FF0000']\n"
+        ))
+        self.assertEqual(
+            config["specifier_notes"]["formatting_signals"]["colors"], ["FF0000"]
+        )
+
+    def test_a_normalised_colour_actually_matches_a_run(self):
+        # Normalising the config and never checking the effect would leave the
+        # original defect in place with a passing test over it.
+        config = load_config(self._write(
+            "specifier_notes:\n  enabled: true\n  formatting_only_removal: true\n"
+            "  text_patterns: []\n  formatting_signals:\n    colors: ['#FF0000']\n"
+        ))
+        run = etree.fromstring(
+            db.run("Coordinate with Division 26.", italic=True, color="FF0000")
+            .replace("<w:r>", f'<w:r xmlns:w="{W_NS}">', 1).encode("utf-8")
+        )
+
+        detections = DetectionEngine(config).detect_in_element(
+            run, "Coordinate with Division 26."
+        )
+
+        self.assertTrue(any("Color" in (d.reason or "") for d in detections))
+
+    def test_lower_case_hex_is_normalised_to_what_word_writes(self):
+        config = load_config(self._write(
+            "specifier_notes:\n  formatting_signals:\n    colors: ['ff0000']\n"
+        ))
+        self.assertEqual(
+            config["specifier_notes"]["formatting_signals"]["colors"], ["FF0000"]
+        )
+
+    def test_prose_is_not_a_colour(self):
+        # Was accepted and matched nothing, forever.
+        with self.assertRaisesRegex(ValueError, "not a colour"):
+            load_config(self._write(
+                "specifier_notes:\n  formatting_signals:\n    colors: ['bright red']\n"
+            ))
+
+    def test_a_number_is_not_a_colour(self):
+        # Was an AttributeError per file at detection time, naming no section,
+        # key or line — the file simply failed.
+        with self.assertRaisesRegex(ValueError, "expected a colour"):
+            load_config(self._write(
+                "specifier_notes:\n  formatting_signals:\n    colors: [255]\n"
+            ))
+
+    def test_the_wrong_number_of_digits_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "six hexadecimal digits"):
+            load_config(self._write(
+                "specifier_notes:\n  formatting_signals:\n    colors: ['FF00']\n"
+            ))
+
+    def test_the_colour_error_names_the_section_key_and_index(self):
+        with self.assertRaises(ValueError) as caught:
+            load_config(self._write(
+                "specifier_notes:\n  formatting_signals:\n"
+                "    colors: ['FF0000', 'nope']\n"
+            ))
+        self.assertIn("specifier_notes.formatting_signals.colors[1]", str(caught.exception))
+
+    def test_colours_must_be_a_list(self):
+        with self.assertRaisesRegex(ValueError, "must be a list of colours"):
+            load_config(self._write(
+                "specifier_notes:\n  formatting_signals:\n    colors: 'FF0000'\n"
+            ))
+
+    def test_a_style_name_absent_from_any_one_document_is_not_an_error(self):
+        # §15.2 is explicit: styles differ across templates, so a name that no
+        # sample document happens to use says nothing about the config.
+        load_config(self._write(
+            "specifier_notes:\n  styles: ['NoSuchStyleAnywhere', 'CMT']\n"
+        ))
 
 
 class ConfigNoticeTests(unittest.TestCase):
@@ -212,3 +325,7 @@ class ConfigNoticeTests(unittest.TestCase):
         self.assertEqual(
             len(config_notices({"specifier_notes": {"formatting_only_removal": True}})), 1
         )
+
+
+if __name__ == "__main__":
+    unittest.main()
