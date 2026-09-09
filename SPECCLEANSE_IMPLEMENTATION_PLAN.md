@@ -902,6 +902,29 @@ establish. The safety assertion is preservation of required text, multiplicity, 
 structural identity. Ambiguity must not be resolved by assuming the editorial occurrence was the one
 deleted.
 
+**Partially closed in W03, on the "available structural identity" clause.** A review of the W03
+branch found the concrete case: a hidden note followed by an identical visible requirement extracts
+the same characters twice, so removing the note leaves a survivor consistent with either occurrence
+having gone. `difflib` assigns the deletion to the first, the second interval has no authority, and a
+*correct* clean is reported as damage.
+
+No text-level rule can resolve it, and the failed candidates are worth recording so they are not
+retried. Accepting when cutting every authorized interval reproduces the output wrongly accepts the
+mirror case — the visible requirement lost and the hidden copy surviving — because the two outcomes
+produce **byte-identical extracted text**. The difference is only which run survived, which is
+structural, exactly as this paragraph anticipated.
+
+So W03 compares the output's own run signatures against the runs a correct clean would leave, and
+accepts on an exact match. Signatures are pure document fact — text plus raw `w:rPr` properties, no
+style resolution and no policy. The path only ever accepts; a mismatch falls through to interval
+reasoning unchanged, so it cannot manufacture a false negative in a case it does not recognise.
+
+**The residual is W04's.** An alignment that is ambiguous *and* not an exact structural match still
+rests on whichever opcode assignment `difflib` chose. §11.2 already requires that such a region return
+an actionable verification limitation counted in the ambiguous-alignment category of §10.6, rather
+than being certified or reported as damage; that category does not exist yet, and W03 does not create
+it.
+
 ### 10.6 False-alarm acceptance criteria
 
 A verifier that routinely raises unexplained alarms loses its practical value, and invariant 15 makes
@@ -993,6 +1016,13 @@ Begin with exact unchanged anchors and exact permitted-transformation candidates
 fallback conservative and constrained by the neighboring established alignment. If the verifier cannot
 resolve an ambiguous region safely, return an actionable verification limitation rather than
 certifying it — and count it in the ambiguous-alignment category of §10.6, not as damage.
+
+W03 closed the exactly-resolvable half of this: where the output's run signatures match the runs a
+correct clean would leave, the ambiguity is settled on evidence (see §10.5). W04 owns what is left —
+the region that stays ambiguous after that check, which today falls back to `difflib`'s opcode
+assignment and is reported as damage when the assignment happens to land outside an authorized
+interval. Creating the ambiguous-alignment category, so those are counted apart from genuine damage
+rather than pooled with it, is part of this package and not of W03.
 
 ### 11.3 Required cases
 
