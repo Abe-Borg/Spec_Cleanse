@@ -4,6 +4,7 @@ import copy
 import unittest
 
 from docx_xml import load_config
+from tools.actions import content_digest
 from tools.corpus_compare import (
     Decision,
     diff,
@@ -35,7 +36,25 @@ class RecordingTests(DocxTestCase):
 
         actions = {d.action for d in decisions}
         self.assertEqual(actions, {"preserved", "removed", "redacted"})
-        self.assertTrue(all(d.rule for d in decisions), "a decision without a rule")
+        self.assertTrue(all(d.rules for d in decisions), "a decision without a rule")
+
+    def test_two_rules_on_one_paragraph_are_one_row(self):
+        # Recording per detection meant narrowing one of two rules removed a
+        # baseline row, and the diff reported "no longer acted on" for content
+        # the candidate still deletes.
+        decisions = self.record(db.document(
+            db.text_para("[Specifier: Copyright 2026 ARCOM]"),
+        ))
+
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].categories, "copyright; specifier_note")
+
+    def test_a_placeholder_only_paragraph_is_recorded_as_removed(self):
+        decisions = self.record(db.document(
+            db.text_para("[Verify quantity with Owner]"),
+        ))
+
+        self.assertEqual([d.action for d in decisions], ["removed"])
 
     def test_untouched_content_is_not_a_decision(self):
         # Only what the build acted on.  Recording every paragraph would bury
@@ -44,12 +63,20 @@ class RecordingTests(DocxTestCase):
 
         self.assertFalse(any("Provide sprinklers throughout" in p for p in previews))
 
-    def test_no_text_omits_previews_but_still_records_the_decisions(self):
-        decisions = self.record(keep_text=False)
+    def test_no_text_omits_previews_but_still_distinguishes_decisions(self):
+        # The privacy mode has to stay comparable.  Without a digest every
+        # decision of one category in a document collapsed to one entry, and a
+        # recording that lost two of three diffed as no change at all.
+        decisions = self.record(db.document(
+            db.text_para("[Specifier: delete note one]"),
+            db.text_para("[Specifier: delete note two]"),
+            db.text_para("[Specifier: delete note three]"),
+        ), keep_text=False)
 
-        self.assertTrue(decisions)
+        self.assertEqual(len(decisions), 3)
         self.assertTrue(all(d.preview == "" for d in decisions))
-        self.assertTrue(all(d.rule for d in decisions))
+        self.assertEqual(len({d.content for d in decisions}), 3)
+        self.assertEqual(len(diff(decisions, decisions[:1])), 2)
 
     def test_a_long_paragraph_is_previewed_not_stored_whole(self):
         long_note = "Retain subparagraph below " + ("x" * 400)
@@ -68,6 +95,13 @@ class RecordingTests(DocxTestCase):
         self.assertEqual(len(decisions), 1)
         self.assertEqual(decisions[0].action, "error")
 
+    def test_repeated_boilerplate_keeps_its_multiplicity(self):
+        note = db.text_para("[Specifier: delete this note before issue]")
+        decisions = self.record(db.document(note, note, note))
+
+        self.assertEqual(len(decisions), 3)
+        self.assertEqual(len(diff(decisions, decisions[:1])), 2)
+
     def test_a_recording_survives_a_round_trip_through_json(self):
         decisions = self.record()
         path = self.temp_dir / "baseline.json"
@@ -79,9 +113,10 @@ class RecordingTests(DocxTestCase):
 
 class DiffTests(unittest.TestCase):
 
-    def decision(self, preview="A note.", action="removed", rule="pattern X",
-                 category="specifier_note", document="a.docx"):
-        return Decision(document, action, category, rule, preview)
+    def decision(self, preview="A note.", action="removed", rules="pattern X",
+                 categories="specifier_note", document="a.docx"):
+        return Decision(document, "document.xml", action, categories, rules,
+                        content_digest(preview), preview)
 
     def test_an_unchanged_recording_diffs_to_nothing(self):
         rows = [self.decision(), self.decision(preview="Another.")]
@@ -115,10 +150,26 @@ class DiffTests(unittest.TestCase):
         self.assertIn("now: redacted", differences[0].describe())
 
     def test_the_same_content_removed_by_a_different_rule(self):
-        differences = diff([self.decision(rule="pattern X")],
-                           [self.decision(rule="pattern Y")])
+        differences = diff([self.decision(rules="pattern X")],
+                           [self.decision(rules="pattern Y")])
 
         self.assertEqual(differences[0].kind, "action changed")
+
+    def test_losing_one_of_several_identical_decisions_is_one_change(self):
+        rows = [self.decision(), self.decision(), self.decision()]
+
+        differences = diff(rows, rows[:2])
+
+        self.assertEqual(len(differences), 1)
+        self.assertEqual(differences[0].kind, "no longer acted on")
+
+    def test_gaining_one_of_several_identical_decisions_is_one_change(self):
+        rows = [self.decision(), self.decision()]
+
+        differences = diff(rows[:1], rows)
+
+        self.assertEqual(len(differences), 1)
+        self.assertEqual(differences[0].kind, "newly acted on")
 
     def test_identity_ignores_position_so_a_shift_is_not_a_change(self):
         # Narrowing a rule changes how many paragraphs go, shifting every

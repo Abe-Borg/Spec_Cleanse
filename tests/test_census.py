@@ -54,6 +54,27 @@ class FormattingCensusTests(DocxTestCase):
         self.assertEqual(report.share_of_removals, 1.0)
         self.assertIn("Coordinate hangers with structural.", report.examples)
 
+    def test_two_rules_on_one_paragraph_count_as_one_removal(self):
+        # The share reported here is what a default decision gets taken on.
+        # Counting detections rather than removed paragraphs reported 3
+        # removals and 33% for this document instead of 2 and 50%.
+        report = self.census(db.document(
+            db.text_para("[Specifier: Copyright 2026 ARCOM]"),
+            db.para(db.run("Coordinate hangers with structural.", **ITALIC_RED)),
+        ))
+
+        self.assertEqual(report.removals_with_switch_on, 2)
+        self.assertEqual(report.would_newly_survive, 1)
+        self.assertEqual(report.share_of_removals, 0.5)
+
+    def test_a_placeholder_only_paragraph_counts_as_a_removal(self):
+        report = self.census(db.document(
+            db.text_para("[Verify quantity with Owner]"),
+        ))
+
+        self.assertEqual(report.removals_with_switch_on, 1)
+        self.assertEqual(report.inline_redactions, 0)
+
     def test_a_pattern_match_that_is_also_italic_is_not_the_switch_s_doing(self):
         # The paragraph goes either way, so flipping the switch changes nothing
         # for it.  Counting detections carrying the formatting-only flag would

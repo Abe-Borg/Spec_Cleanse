@@ -19,21 +19,28 @@ dry run.
 **Privacy.** Rows carry a truncated preview of the text a decision was made
 about, because a diff nobody can read is not reviewable. Specifications are
 usually proprietary: keep recordings in a scratch directory, and do not commit
-one without the maintainer's say-so. ``--no-text`` omits previews entirely and
-leaves only counts and rules, which still diffs usefully.
+one without the maintainer's say-so.
+
+``--no-text`` omits previews and leaves a short content digest in their place.
+The digest is what makes two recordings comparable at all — without it, every
+decision of one category in a document would collapse to one entry and a
+missing decision would diff as no change. It is a fingerprint, not encryption:
+a digest of a sentence you already suspect can be confirmed by hashing it. What
+it prevents is a recording being *readable*, which is what committing one would
+otherwise leak.
 """
 
 import json
 import sys
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from apppaths import resolve_config_path            # noqa: E402
-from detection import ContentType, DetectionEngine  # noqa: E402
 from docx_xml import load_config                    # noqa: E402
-from processor import DocxProcessor                 # noqa: E402
+from tools.actions import content_digest, iter_actions  # noqa: E402
 from tools.census_formatting import collect_paths   # noqa: E402
 
 PREVIEW_WIDTH = 100
@@ -44,21 +51,32 @@ class Decision:
     """One thing a build decided to do to one piece of content."""
 
     document: str
-    #: ``removed``, ``redacted`` or ``preserved``.
+    part: str
+    #: ``removed``, ``redacted``, ``run removed``, ``preserved`` or ``error``.
     action: str
-    category: str
-    rule: str
+    #: Every category behind the action, joined. A paragraph can have more than
+    #: one, and recording them separately made one action look like several.
+    categories: str
+    rules: str
+    #: Fingerprint of the content, always present. Identity rests on this, so a
+    #: recording taken with --no-text still compares.
+    digest: str
     preview: str
 
     @property
-    def identity(self) -> tuple[str, str, str]:
-        """What makes two decisions the same decision across two recordings.
+    def content(self) -> tuple[str, str]:
+        """Which piece of content this decision is about.
 
         Deliberately not the position: narrowing a rule changes how many
         paragraphs are removed, so every later position shifts and a
         position-keyed diff would report the whole document as changed.
         """
-        return (self.document, self.preview, self.category)
+        return (self.document, self.digest)
+
+    @property
+    def detail(self) -> tuple[str, str, str]:
+        """What was decided about it."""
+        return (self.action, self.categories, self.rules)
 
 
 def _preview(text: str, keep_text: bool) -> str:
@@ -69,32 +87,31 @@ def _preview(text: str, keep_text: bool) -> str:
 
 
 def record_one(path: Path, config: dict, keep_text: bool = True) -> list[Decision]:
-    """Every decision a dry run makes about one document."""
-    engine = DetectionEngine(config)
-    result = DocxProcessor(engine, dry_run=True).process(
-        path, path.parent / "unused.docx"
-    )
-    if result.errors:
-        return [Decision(path.name, "error", "processing", "; ".join(result.errors), "")]
+    """Every decision a dry run makes about one document.
 
-    decisions: list[Decision] = []
-    for detection in result.detections:
-        if detection.content_type == ContentType.PRESERVE:
-            action = "preserved"
-        elif detection.content_type == ContentType.INLINE_PLACEHOLDER:
-            action = "redacted"
-        elif engine.should_remove([detection]):
-            action = "removed"
-        else:
-            continue  # detected but not acted on; not a decision
-        decisions.append(Decision(
-            document=path.name,
-            action=action,
-            category=detection.content_type.value,
-            rule=detection.reason,
-            preview=_preview(detection.text, keep_text),
-        ))
-    return decisions
+    One row per *action*, not per detection. A paragraph can carry several
+    detections and still be one action; recording them separately meant that
+    narrowing one of two rules removed a baseline row and the diff reported
+    "no longer acted on" for content the candidate still deletes.
+    """
+    try:
+        actions = iter_actions(path, config)
+    except Exception as exc:
+        return [Decision(path.name, "", "error", "processing", str(exc),
+                         content_digest(str(exc)), "")]
+
+    return [
+        Decision(
+            document=action.document,
+            part=action.part,
+            action=action.action,
+            categories="; ".join(action.categories),
+            rules="; ".join(action.rules),
+            digest=action.digest,
+            preview=_preview(action.text, keep_text),
+        )
+        for action in actions
+    ]
 
 
 def record(paths: list[Path], config: dict, keep_text: bool = True) -> list[Decision]:
@@ -123,29 +140,59 @@ class Difference:
     def describe(self) -> str:
         subject = self.candidate or self.baseline
         assert subject is not None
-        lines = [f"[{self.kind}] {subject.document}: {subject.preview or '(no text)'}"]
+        shown = subject.preview or f"(digest {subject.digest})"
+        lines = [f"[{self.kind}] {subject.document}: {shown}"]
         if self.baseline is not None:
-            lines.append(f"    was: {self.baseline.action} — {self.baseline.rule}")
+            lines.append(f"    was: {self.baseline.action} — {self.baseline.rules}")
         if self.candidate is not None:
-            lines.append(f"    now: {self.candidate.action} — {self.candidate.rule}")
+            lines.append(f"    now: {self.candidate.action} — {self.candidate.rules}")
         return "\n".join(lines)
+
+
+def _index(decisions: list[Decision]):
+    """Group decisions by the content they are about, keeping multiplicity.
+
+    A specification repeats boilerplate, so the same content carries the same
+    decision many times over. Indexing by identity alone collapsed those to one
+    entry, and a recording that lost two of three identical removals diffed as
+    no change at all.
+    """
+    counts: dict[tuple[str, str], Counter] = {}
+    rows: dict[tuple[tuple[str, str], tuple[str, str, str]], Decision] = {}
+    for decision in decisions:
+        counts.setdefault(decision.content, Counter())[decision.detail] += 1
+        rows.setdefault((decision.content, decision.detail), decision)
+    return counts, rows
 
 
 def diff(baseline: list[Decision], candidate: list[Decision]) -> list[Difference]:
     """The decisions that changed, and only those."""
-    before = {d.identity: d for d in baseline}
-    after = {d.identity: d for d in candidate}
+    before, before_rows = _index(baseline)
+    after, after_rows = _index(candidate)
 
     differences: list[Difference] = []
-    for identity, old in before.items():
-        new = after.get(identity)
-        if new is None:
-            differences.append(Difference("no longer acted on", old, None))
-        elif new.action != old.action or new.rule != old.rule:
-            differences.append(Difference("action changed", old, new))
-    for identity, new in after.items():
-        if identity not in before:
-            differences.append(Difference("newly acted on", None, new))
+    for content in sorted(before.keys() | after.keys()):
+        was = before.get(content, Counter())
+        now = after.get(content, Counter())
+        lost = sorted((was - now).elements())
+        gained = sorted((now - was).elements())
+
+        # The same content decided differently: pair them off, so a rule change
+        # reads as one changed decision rather than a removal and an addition.
+        for old_detail, new_detail in zip(lost, gained):
+            differences.append(Difference(
+                "action changed",
+                before_rows[(content, old_detail)],
+                after_rows[(content, new_detail)],
+            ))
+        for old_detail in lost[len(gained):]:
+            differences.append(Difference(
+                "no longer acted on", before_rows[(content, old_detail)], None
+            ))
+        for new_detail in gained[len(lost):]:
+            differences.append(Difference(
+                "newly acted on", None, after_rows[(content, new_detail)]
+            ))
 
     return differences
 

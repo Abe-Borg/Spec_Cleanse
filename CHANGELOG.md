@@ -10,7 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `tools/`, developer measurement utilities. Nothing in the application imports
-  them, they only read documents, and every clean they run is a dry run.
+  them, they only read documents, and every clean they run is a dry run. All of
+  them rest on `tools/actions.py`, which reports what a build would *do* — one
+  row per action, mirroring the processor's own decision order — rather than
+  what the detectors found. The two are different, and the difference decides
+  whether the numbers are worth anything.
   - `census_formatting` measures what turning `formatting_only_removal` off
     would cost, by cleaning each document twice and reporting the paragraphs
     that would newly survive. The proposal to flip that default has so far

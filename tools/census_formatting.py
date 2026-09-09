@@ -9,9 +9,15 @@ would cost a real workflow.
 
 This measures it directly, by cleaning each document twice — once with the
 switch on, once off — and reporting the paragraphs that would newly survive.
-Counting detections that carry the flag would overstate the cost: a paragraph
-whose formatting-only detection sits alongside a pattern match is removed
-either way, and flipping the switch changes nothing for it.
+
+It counts *paragraphs the processor would remove*, not detections. Those are
+not the same number: a note matching both a specifier rule and a copyright rule
+produces two detections and one removed paragraph, and counting detections
+inflated the removal total and so deflated the very percentage this exists to
+report. Counting detections that merely carry the formatting-only flag would be
+wrong for a second reason: a paragraph whose formatting-only detection sits
+alongside a pattern match is removed either way, and flipping the switch
+changes nothing for it.
 
 Nothing is written. Both runs are dry runs.
 
@@ -27,9 +33,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from apppaths import resolve_config_path            # noqa: E402
-from detection import ContentType, DetectionEngine  # noqa: E402
 from docx_xml import load_config                    # noqa: E402
-from processor import DocxProcessor                 # noqa: E402
+from tools.actions import (                         # noqa: E402
+    PRESERVED,
+    REDACTED,
+    REMOVED,
+    iter_actions,
+)
 
 
 @dataclass
@@ -62,61 +72,48 @@ class FormattingCensus:
         return self.would_newly_survive / self.removals_with_switch_on
 
 
-def _engine(config: dict, formatting_only: bool) -> DetectionEngine:
-    """An engine from ``config`` with the switch forced one way."""
+def _with_switch(config: dict, formatting_only: bool) -> dict:
+    """A copy of ``config`` with the switch forced one way."""
     copied = {
         key: (dict(value) if isinstance(value, dict) else value)
         for key, value in config.items()
     }
     copied.setdefault("specifier_notes", {})["formatting_only_removal"] = formatting_only
-    return DetectionEngine(copied)
+    return copied
 
 
-def _removed_texts(path: Path, engine: DetectionEngine) -> Counter:
-    """Text of every paragraph a dry run would remove, as a multiset.
+def _removed_texts(actions) -> Counter:
+    """Text of every paragraph the build would remove, as a multiset.
 
     A multiset rather than a set because a document repeats paragraphs —
     identical headings, identical boilerplate — and losing that multiplicity
     would understate the count.
     """
-    processor = DocxProcessor(engine, dry_run=True)
-    result = processor.process(path, path.parent / "unused.docx")
-    if result.errors:
-        raise RuntimeError("; ".join(result.errors))
-
-    removed: Counter = Counter()
-    for detection in result.detections:
-        if detection.content_type in (ContentType.PRESERVE,
-                                      ContentType.INLINE_PLACEHOLDER):
-            continue
-        if engine.should_remove([detection]):
-            removed[detection.text.strip()] += 1
-    return removed
+    return Counter(action.text for action in actions if action.action == REMOVED)
 
 
 def census_one(path: Path, config: dict, sample: int = 5) -> FormattingCensus:
     """Measure one document."""
     report = FormattingCensus(path=path)
     try:
-        on = _removed_texts(path, _engine(config, True))
-        off = _removed_texts(path, _engine(config, False))
+        with_switch = iter_actions(path, _with_switch(config, True))
+        without_switch = iter_actions(path, _with_switch(config, False))
     except Exception as exc:  # a census must not stop on one bad file
         report.error = str(exc)
         return report
 
+    on = _removed_texts(with_switch)
+    off = _removed_texts(without_switch)
     report.removals_with_switch_on = sum(on.values())
     report.removals_with_switch_off = sum(off.values())
 
     lost = on - off
     report.examples = [text for text, _ in lost.most_common(sample) if text]
 
-    survey = DocxProcessor(_engine(config, True), dry_run=True).process(
-        path, path.parent / "unused.docx"
-    )
-    for detection in survey.detections:
-        if detection.content_type == ContentType.INLINE_PLACEHOLDER:
+    for action in with_switch:
+        if action.action == REDACTED:
             report.inline_redactions += 1
-        elif detection.content_type == ContentType.PRESERVE:
+        elif action.action == PRESERVED:
             report.preserved += 1
 
     return report

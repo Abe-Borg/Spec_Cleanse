@@ -292,7 +292,14 @@ python -m tools.corpus_compare diff baseline.json candidate.json
 
 Recordings and census output carry excerpts of the documents they measured.
 Specifications are usually proprietary — keep them in a scratch directory and do not
-commit one. `corpus_compare --no-text` omits excerpts entirely and still diffs.
+commit one. `corpus_compare --no-text` omits excerpts and leaves a short content
+digest in their place, which is what keeps two recordings comparable. The digest is
+a fingerprint, not encryption: it stops a recording being readable, which is what
+committing one would leak.
+
+All three read what the processor would actually *do*, not what the detectors found.
+Those differ — a note matching two rules is two detections and one removed
+paragraph — and the numbers are only worth taking a decision on because of it.
 
 ## Project structure
 
