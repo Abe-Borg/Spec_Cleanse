@@ -30,6 +30,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from batch import ReviewCategory
 from detection import DetectionEngine, ParagraphEvidence
 from docx_xml import (
     P_TAG,
@@ -183,6 +184,11 @@ class RemovedParagraph:
     text: str
     category: str | None = None       # e.g. "specifier_note", or None if unexpected
     pattern_matched: str | None = None # the regex or signal that matched
+    #: True when the paragraph's own offsets could not be trusted, so no
+    #: interval question about it could be answered and everything it lost
+    #: reads as unexplained.  That is the verifier declining to reason, not a
+    #: finding about the document — see :class:`ReviewCategory`.
+    ambiguous: bool = False
 
 
 @dataclass
@@ -193,6 +199,11 @@ class ModifiedParagraph:
     fragments: list[str] = field(default_factory=list)
     category: str | None = None
     pattern_matched: str | None = None
+    #: True when this paragraph was paired with its survivor by similarity
+    #: rather than by an exact answer.  The fragments such a pairing reports
+    #: are alignment artefacts — a real case produced ``'nd hangers a'`` — so
+    #: reporting them as content someone lost overstates what is known.
+    ambiguous: bool = False
 
     @property
     def text(self) -> str:
@@ -205,6 +216,12 @@ class StructuralViolation:
     """Damage to the document's structure that the output has and the input did not."""
     issue: str
     count: int = 1
+    #: ``"structure"`` for a shape the package should not have, ``"reference"``
+    #: for a cross-reference this run broke.  A field, not a substring of
+    #: ``issue``: deciding a category by matching the sentence shown to the
+    #: user makes the wording load-bearing, and the wording is meant to be
+    #: free to change.
+    kind: str = "structure"
 
     def __str__(self) -> str:
         return f"{self.issue}" + (f" (x{self.count})" if self.count > 1 else "")
@@ -322,6 +339,16 @@ class VerificationResult:
         )
 
     @property
+    def reference_violations(self) -> list[StructuralViolation]:
+        """Cross-references this run broke — a warning, not lost content."""
+        return [v for v in self.structural if v.kind == "reference"]
+
+    @property
+    def structural_damage(self) -> list[StructuralViolation]:
+        """Structural problems the output has that are not broken references."""
+        return [v for v in self.structural if v.kind != "reference"]
+
+    @property
     def passed(self) -> bool:
         return not (
             self.unexpected_removals
@@ -331,6 +358,42 @@ class VerificationResult:
             or self.added
             or self.numbering
         )
+
+    def review_categories(self) -> set[ReviewCategory]:
+        """Why this file needs review — every reason that applies, never one.
+
+        A file can be in several categories at once and picking one to show
+        would be the pooling §10.6 criterion 3 exists to prevent.
+
+        The split between the first two turns on *how the verdict was reached*,
+        not on how bad it sounds.  A preserve violation, an invented paragraph
+        or a structural problem is a claim about the document: the comparison
+        knew what it was looking at.  An unexplained removal or modification is
+        only such a claim when the alignment behind it was exact — where it was
+        a guess, what the report actually establishes is that the verifier
+        could not follow the change, and calling that damage would overstate
+        it in exactly the direction that trains a user to ignore the verdict.
+
+        Configuration is deliberately absent here: nothing in a comparison of
+        two documents can see it.  ``verdict_for`` adds it, from the rules the
+        run was given.
+        """
+        categories: set[ReviewCategory] = set()
+
+        unexplained = self.unexpected_removals + self.unexpected_modifications
+        if any(finding.ambiguous for finding in unexplained):
+            categories.add(ReviewCategory.AMBIGUOUS_ALIGNMENT)
+        if (
+            self.preserve_violations
+            or self.added
+            or self.structural_damage
+            or any(not finding.ambiguous for finding in unexplained)
+        ):
+            categories.add(ReviewCategory.DETECTED_DAMAGE)
+        if self.numbering or self.reference_violations:
+            categories.add(ReviewCategory.REFERENCE_NUMBERING)
+
+        return categories
 
 
 # =============================================================================
@@ -522,7 +585,8 @@ def _compare_structure(
         if consumer.folded in newly_broken and consumer.folded in before.bookmarks:
             violations.append(StructuralViolation(
                 f"{part}: reference broken — {consumer} names {{{consumer.name}}}, "
-                "which no bookmark defines"
+                "which no bookmark defines",
+                kind="reference",
             ))
 
     # A field carrier can vanish while the text stays identical — the cached
@@ -676,7 +740,7 @@ def _compare_location(
     # some *other* paragraph's loss counts it twice and leaves the real loss
     # unclassified — a deleted requirement reported as a verified clean.
     removals: list[int] = []
-    modifications: list[tuple[int, int, list[tuple[int, int]]]] = []
+    modifications: list[tuple[int, int, list[tuple[int, int]], bool]] = []
     survived: set[int] = set()
 
     matcher = difflib.SequenceMatcher(None, input_texts, output_texts, autojunk=False)
@@ -699,11 +763,11 @@ def _compare_location(
                 removals.append(idx)
                 continue
 
-            jdx, intervals = match
+            jdx, intervals, guessed = match
             paired.add(jdx)
             survived.add(idx)
             if intervals:
-                modifications.append((idx, jdx, intervals))
+                modifications.append((idx, jdx, intervals, guessed))
 
         # Anything in the replacement block that no input paragraph explains
         # is text the clean invented.
@@ -711,9 +775,11 @@ def _compare_location(
             output_texts[jdx] for jdx in range(j1, j2) if jdx not in paired
         )
 
-    for idx, jdx, intervals in modifications:
+    for idx, jdx, intervals, guessed in modifications:
         result.modified.append(
-            _classify_modification(input_paras[idx], output_paras[jdx], intervals)
+            _classify_modification(
+                input_paras[idx], output_paras[jdx], intervals, guessed
+            )
         )
 
     lost = _lost_signatures(input_paras, output_paras)
@@ -816,7 +882,15 @@ def _pair_with_survivor(
     the similarity path below, unchanged, and whatever it lost still has to be
     covered by an authorized interval before it counts as expected.
 
-    Returns the survivor's index and the intervals of ``info.text`` it lost.
+    Returns the survivor's index, the intervals of ``info.text`` it lost, and
+    whether that pairing was reached by the guess rather than by an exact
+    answer.  The caller needs the third value to say *why* a file needs
+    review: an unexplained loss found on an exact pairing is a claim about the
+    document, and the same loss found on a guessed one is the verifier saying
+    it could not follow what happened.  Case A of the W07 probe shows the
+    difference plainly — a similarity pairing reported the fragments ``'nd
+    hangers a'`` and ``' on drawings'``, which are artefacts of where the
+    differ happened to align, not text anyone edited out.
     """
     expected = info.expected_after_removal()
 
@@ -825,7 +899,7 @@ def _pair_with_survivor(
             continue
         after = output_paras[jdx].text
         if after == info.text:
-            return jdx, []
+            return jdx, [], False
         if expected is not None and after == expected:
             # Matching text is not on its own evidence that the *right* text
             # went: a paragraph holding a visible requirement and an identical
@@ -834,9 +908,13 @@ def _pair_with_survivor(
             # known; otherwise the ordinary reasoning below decides, and the
             # loss of the visible copy is still reported.
             if output_paras[jdx].run_profile == info.evidence.expected_profile():
-                return jdx, _substantive(info.text, info.authorized_intervals())
+                return jdx, _substantive(info.text, info.authorized_intervals()), False
+            # The text is what a correct clean would produce but the runs are
+            # not, so which occurrence survived is exactly what is unknown.
+            # Intervals re-derived by diffing here are a guess about *which*
+            # characters went, and are marked as one.
             intervals = _removed_intervals(info.text, after) or []
-            return jdx, _substantive(info.text, intervals)
+            return jdx, _substantive(info.text, intervals), True
 
     for jdx in range(j1, j2):
         if jdx in paired:
@@ -850,7 +928,7 @@ def _pair_with_survivor(
             None, info.text, after, autojunk=False).ratio()
         if similarity < MIN_PAIR_SIMILARITY:
             continue
-        return jdx, _substantive(info.text, intervals)
+        return jdx, _substantive(info.text, intervals), True
 
     return None
 
@@ -899,13 +977,20 @@ def _classify_removal(
         if authorities:
             return RemovedParagraph(info.text, *_verdict(authorities))
 
-    return RemovedParagraph(info.text, None, None)
+    # Unexplained.  A removal is never paired, so there is no similarity guess
+    # behind it; the one way this verdict can rest on the verifier's own limits
+    # is unreliable offsets, which make covers_all_text() answer False whatever
+    # the paragraph holds.
+    return RemovedParagraph(
+        info.text, None, None, ambiguous=not evidence.offsets_reliable
+    )
 
 
 def _classify_modification(
     info: ParagraphInfo,
     survivor: ParagraphInfo,
     intervals: list[tuple[int, int]],
+    guessed_pairing: bool = False,
 ) -> ModifiedParagraph:
     """Decide whether the text a surviving paragraph lost was meant to go.
 
@@ -951,7 +1036,15 @@ def _classify_modification(
     for start, end in intervals:
         authority = info.authority_for(start, end)
         if authority is None:
-            return ModifiedParagraph(info.text, after, fragments)
+            # Unexplained.  Whether that is a claim about the document or the
+            # verifier declining to follow it depends on how this paragraph was
+            # paired, and on whether its offsets could be trusted at all — with
+            # unreliable offsets every interval question answers "no authority",
+            # so the absence of one says nothing.
+            return ModifiedParagraph(
+                info.text, after, fragments,
+                ambiguous=guessed_pairing or not info.evidence.offsets_reliable,
+            )
         authorities.append(authority)
 
     category, pattern = _verdict(authorities)
