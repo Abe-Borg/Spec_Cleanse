@@ -89,6 +89,72 @@ class NamespaceDeclarationTests(DocxTestCase):
 class PackageShapeTests(DocxTestCase):
     """A generated package has the parts the application expects to walk."""
 
+    def _relationships(self, path: Path) -> list[tuple[str, str, str]]:
+        """(rels part, target as written, target resolved) for internal targets."""
+        found = []
+        with zipfile.ZipFile(path) as archive:
+            for name in archive.namelist():
+                if not name.endswith(".rels"):
+                    continue
+                root = etree.fromstring(archive.read(name))
+                base = ("" if name == "_rels/.rels"
+                        else name.rsplit("/_rels/", 1)[0] + "/")
+                for rel in root:
+                    if rel.get("TargetMode") == "External":
+                        continue
+                    target = rel.get("Target")
+                    found.append((name, target, base + target))
+        return found
+
+    def test_every_internal_relationship_resolves_to_a_part_that_exists(self):
+        # The check that was missing: asserting member *names* are present says
+        # nothing about whether the relationships pointing at them resolve.  The
+        # builder wrote a comments relationship into every package, so a fixture
+        # without comments named a part that was not there — the same dangling
+        # relationship `test_revisions.test_package_bookkeeping_is_updated`
+        # asserts the cleaner must never leave behind.
+        for label, extra in (
+            ("plain", None),
+            ("with a header", {"word/header1.xml": db.header(db.text_para("H"))}),
+            ("with comments", {"word/comments.xml": db.comments("A note.")}),
+        ):
+            with self.subTest(label):
+                path = self.build(db.document(db.text_para("Body.")), extra,
+                                  name=f"{label.replace(' ', '_')}.docx")
+                with zipfile.ZipFile(path) as archive:
+                    names = set(archive.namelist())
+
+                dangling = [
+                    (rels, target) for rels, target, resolved
+                    in self._relationships(path) if resolved not in names
+                ]
+
+                self.assertEqual(dangling, [], f"{label}: relationships name absent parts")
+
+    def test_a_supplied_part_still_gets_its_relationship(self):
+        # The guard against the fix above being satisfied by emitting no
+        # relationships at all: test_revisions depends on the comments
+        # relationship existing when comments do.
+        path = self.build(db.document(db.text_para("Body.")),
+                          {"word/comments.xml": db.comments("A note.")})
+
+        targets = {target for _, target, _ in self._relationships(path)}
+
+        self.assertIn("comments.xml", targets)
+
+    def test_a_part_with_no_relationship_type_is_simply_not_linked(self):
+        # A fixture may carry a part the builder has no relationship type for;
+        # that must not invent one, which would dangle in the other direction.
+        path = self.build(db.document(db.text_para("Body.")),
+                          {"word/glossary/document.xml": db.document(db.text_para("G."))})
+
+        with zipfile.ZipFile(path) as archive:
+            names = set(archive.namelist())
+        dangling = [t for _, t, resolved in self._relationships(path)
+                    if resolved not in names]
+
+        self.assertEqual(dangling, [])
+
     def test_the_required_package_parts_are_present(self):
         path = self.build(db.document(db.text_para("Provide listed sprinklers.")))
 

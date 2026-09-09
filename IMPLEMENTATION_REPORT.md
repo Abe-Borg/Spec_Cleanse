@@ -109,9 +109,22 @@ Coverage of the two layers §17.1 singles out:
   mocks the parser, writer, or structural inspection.
 
 W10 added a layer the plan implies but did not have: the fixtures were checked as
-*documents*. Every generated part named `w14` in `mc:Ignorable` without declaring
-it, which Markup Compatibility does not permit — invisible to every existing test
-and disqualifying for the Word validation in §17.3.
+*documents*. Two defects surfaced, both invisible to every existing test and both
+disqualifying for the Word validation in §17.3.
+
+- Every generated part named `w14` in `mc:Ignorable` without declaring it, which
+  Markup Compatibility does not permit.
+- Every package carried a relationship to `word/comments.xml` whether or not that
+  part was present — a dangling relationship, which is precisely what
+  `test_revisions.test_package_bookkeeping_is_updated` asserts the *cleaner* must
+  never leave behind. The project already treated this as package-breaking when
+  its own code did it, and did it by construction in every fixture.
+
+The second was found by review, after the first round of this work had asserted
+the fixtures were valid. The test written to establish that had checked member
+*names* were present and never that relationships resolved — which is the same
+error one level up, and worth recording: checking the defect you just thought of
+is not the same as checking the class it belongs to.
 
 ## 4. Performance
 
