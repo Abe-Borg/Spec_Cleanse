@@ -1135,6 +1135,32 @@ revisions legitimately remove that field and the source revision evidence explai
 **Exit gate:** exact text assertions and XML-carrier assertions pass; no field, section, or picture
 preservation regression; Word validation cases are queued for W10.
 
+### 12.4 What W05 found
+
+**§12.1 needed no new work.** X01–X04 were measured against real cleans first and all four already
+behaved correctly — W00's element-aware redaction reaches a placeholder crossing a hyperlink wrapper,
+one split across `w:t` nodes, and a run scheduled for both redaction and removal, and the page-break
+policy holds under each. X01 and X02 were already pinned; X03 and X04 are pinned now.
+
+**§12.2 was the whole package, and reproduced exactly as written.** `has_embedded_content()` returns
+True for a complex field and False for the character-identical simple one, so an editorial paragraph
+whose only field was simple was deleted whole, taking a live cross-reference with it — and because the
+paragraph's text was exactly what the rule asked to remove, verification passed. X06 confirmed the
+second half: with the text unchanged and the carrier stripped, verification reported nothing at all.
+
+The two halves are independent and were fixed independently, which the tests check by disabling each
+in turn: removing `w:fldSimple` from `EMBEDDED_CONTENT_TAGS` fails three tests, and neutering the
+field comparison fails three others.
+
+Fields are compared by instruction and **per part**, per §12.2, not by a document-wide count — the
+same reasoning as W04's locations, arrived at for the same reason. Instructions are normalised because
+Word splits a complex one across `w:instrText` nodes at arbitrary points, so ` REF ` + `Target ` and
+` REF Target ` are one field written two ways.
+
+No field instruction is rewritten and no field value is updated programmatically, per §12.2. The
+caveat that section asks for is documented in `CLAUDE.md` and the changelog: keeping a wrapper is not
+a promise about its value, because Word recalculates on refresh.
+
 ## 13. W06: reference integrity, revision-empty tables, and numbering notices
 
 ### 13.1 Referenced bookmark targets — detect and report first

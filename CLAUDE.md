@@ -396,6 +396,37 @@ spans in the same paragraph are still cut. A soft break (no type, or
 The guard inside `_redact_spans()` is unreachable by the ordinary path and kept only
 as a last line of defence, because stranding a break is not recoverable.
 
+### Field Carriers
+
+Word records the same field two ways, and only one of them was protected.
+
+| Form | Instruction lives in | Was protected |
+|---|---|---|
+| `w:fldSimple` | the `w:instr` **attribute** | no |
+| complex field | `w:instrText` between `w:fldChar` begin/end | yes |
+
+A field's cached result reads as ordinary words, so an editorial pattern matching the
+paragraph around it deleted the live cross-reference with it — and because the text was
+what the rule asked to remove, nothing reported the loss. `w:fldSimple` is now in
+`EMBEDDED_CONTENT_TAGS`, so `has_embedded_content()` protects its paragraph and
+`_remove_paragraph` empties it in place instead of deleting it.
+
+`docx_xml.field_instructions()` reads both forms and normalises the instruction, because
+Word splits a complex instruction across `w:instrText` nodes at arbitrary points — ` REF `
+plus `Target ` is the same field as ` REF Target `. It returns a Counter, not a set: a
+document may legitimately hold the same field twice and losing one of them is still a loss.
+
+Verification compares those instructions **per part**, not as a document-wide count. A
+field lost from a header is not answered by an identical one in the body, and a total
+would hide one field going while another arrives. `skip_deleted` leaves out fields inside
+a tracked deletion, which a run accepting revisions removes legitimately — the source
+revision is the evidence that explains their absence.
+
+**Keeping a wrapper is not a promise about its value.** Word recalculates fields on
+refresh, so a preserved-but-emptied field result may come back. What is promised is that
+the instruction and its wrapper are still there to recalculate from. Field instructions
+are never rewritten and field values are never updated programmatically.
+
 ### Files Walked
 
 `processor.py` and `verify.py` both walk the parts returned by `docx_xml.collect_content_parts()`, inside the `word/` directory:

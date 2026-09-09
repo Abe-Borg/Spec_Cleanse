@@ -38,6 +38,7 @@ from docx_xml import (
     block_children,
     collect_content_parts,
     field_chars_balanced,
+    field_instructions,
     iter_paragraphs,
     note_identity,
     paragraph_signature,
@@ -203,6 +204,11 @@ class StructureReport:
     """What an inspection of one DOCX found."""
     issues: Counter = field(default_factory=Counter)
     section_breaks: int = 0
+    #: Field carriers keyed by ``(part, instruction)``.  Per part, because a
+    #: field lost from the body is not answered by an identical one in a
+    #: header; by instruction rather than by a count, because a document-wide
+    #: total hides one field going while another arrives.
+    fields: Counter = field(default_factory=Counter)
 
 
 @dataclass
@@ -358,7 +364,7 @@ def _in_tracked_deletion(para: etree._Element) -> bool:
 # Structural inspection
 # =============================================================================
 
-def inspect_structure(docx_path: Path) -> StructureReport:
+def inspect_structure(docx_path: Path, strip_revisions: bool = False) -> StructureReport:
     """Inspect a DOCX for structure Word will refuse to open.
 
     Pattern matching cannot see any of this: a footer emptied of block
@@ -389,6 +395,9 @@ def inspect_structure(docx_path: Path) -> StructureReport:
 
             report.section_breaks += sum(1 for _ in root.iter(f"{W}sectPr"))
 
+            for instruction, count in field_instructions(root, strip_revisions).items():
+                report.fields[(part, instruction)] += count
+
         return report
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -403,13 +412,15 @@ def lint_structure(docx_path: Path) -> list[str]:
     ]
 
 
-def _compare_structure(input_path: Path, output_path: Path) -> list[StructuralViolation]:
+def _compare_structure(
+    input_path: Path, output_path: Path, strip_revisions: bool = False
+) -> list[StructuralViolation]:
     """Report structural damage the output has and the input did not.
 
     Documents arrive with oddities of their own; only what the clean added is
     the clean's fault.
     """
-    before = inspect_structure(input_path)
+    before = inspect_structure(input_path, strip_revisions)
     after = inspect_structure(output_path)
 
     violations = [
@@ -423,6 +434,17 @@ def _compare_structure(input_path: Path, output_path: Path) -> list[StructuralVi
         violations.append(
             StructuralViolation("section break(s) lost from the document", lost_sections)
         )
+
+    # A field carrier can vanish while the text stays identical — the cached
+    # result reads as ordinary words, so nothing else in the comparison sees it
+    # go.  Losing one turns a live cross-reference into a frozen string.
+    for (part, instruction), count in sorted(before.fields.items()):
+        lost = count - after.fields[(part, instruction)]
+        if lost > 0:
+            shown = instruction or "(no instruction)"
+            violations.append(
+                StructuralViolation(f"{part}: field lost — {{{shown}}}", lost)
+            )
 
     return violations
 
@@ -504,7 +526,7 @@ def verify_clean(
         output_path=output_path,
         input_paragraph_count=len(input_texts),
         output_paragraph_count=len(output_texts),
-        structural=_compare_structure(input_path, output_path),
+        structural=_compare_structure(input_path, output_path, strip_revisions),
     )
 
     for location in _locations(input_paras, output_paras):

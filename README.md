@@ -300,8 +300,14 @@ plain requirement disappears must not.
   plus an invented paragraph.
 - **Structural violations** — an emptied header, footer, footnote, text box or table
   cell; a cell that no longer ends with a paragraph; an unbalanced field; a lost
-  section break. The input is inspected too, so a document's own pre-existing
-  oddities are not blamed on the clean.
+  section break; a lost field carrier. The input is inspected too, so a document's
+  own pre-existing oddities are not blamed on the clean.
+
+  Field carriers are worth singling out. A cross-reference or page number caches
+  its result as ordinary text, so a stripped field leaves the same characters
+  behind and no text comparison can see it go — what is lost is the live
+  reference, not the words. Fields are therefore compared by instruction and by
+  part, so an identical field elsewhere in the document cannot cover the loss.
 - **Added paragraphs** — text in the output that was not in the input.
 
 A run passes only when all four come back clean. The verdict is advisory: a file

@@ -12,6 +12,7 @@ text string the detectors match against.  It holds no detection policy.
 """
 
 import re
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -83,6 +84,7 @@ EMBEDDED_CONTENT_TAGS = frozenset({
     f"{W}pict",
     f"{W}object",
     f"{W}fldChar",
+    f"{W}fldSimple",
     f"{W}instrText",
     f"{W}footnoteReference",
     f"{W}endnoteReference",
@@ -266,6 +268,71 @@ def has_embedded_content(elem: etree._Element) -> bool:
 #: ``w:br/@w:type`` values that move content instead of just wrapping it.  A
 #: break with no type, or ``textWrapping``, is a soft line break.
 LAYOUT_BREAK_TYPES = frozenset({"page", "column"})
+
+
+def in_tracked_deletion(node: etree._Element) -> bool:
+    """True if a tracked change marks ``node`` or a container of it as deleted.
+
+    Covers all three markups: a run-level ``w:del`` wrapper, a deleted table row
+    recording it in ``w:trPr``, and a deleted cell in ``w:tcPr``.
+    """
+    while node is not None:
+        if node.tag == f"{W}del":
+            return True
+        if node.tag == f"{W}tr" and node.find(f"{W}trPr/{W}del") is not None:
+            return True
+        if node.tag == TC_TAG and node.find(f"{W}tcPr/{W}cellDel") is not None:
+            return True
+        node = node.getparent()
+    return False
+
+
+def field_instructions(scope: etree._Element, skip_deleted: bool = False) -> Counter:
+    """Every field instruction inside ``scope``, however the field is written.
+
+    Word records the same field two ways.  A *simple* field is one
+    ``w:fldSimple`` carrying its instruction in ``w:instr``; a *complex* one is
+    a run sequence delimited by ``w:fldChar``, with the instruction spread over
+    ``w:instrText`` nodes in between.  A count of one kind says nothing about
+    the other, which is how a document could lose a simple field and still look
+    intact.
+
+    Instructions are whitespace-normalised, because Word splits them across
+    ``w:instrText`` nodes at arbitrary points.  A Counter rather than a set: a
+    document may legitimately hold the same field twice, and losing one of them
+    is still a loss.
+
+    ``skip_deleted`` leaves out fields inside a tracked deletion, which a run
+    that accepts revisions removes legitimately — the source revision is the
+    evidence that explains their absence from the output.
+    """
+    found: Counter = Counter()
+
+    for field in scope.iter(f"{W}fldSimple"):
+        if skip_deleted and in_tracked_deletion(field):
+            continue
+        found[" ".join((field.get(f"{W}instr") or "").split())] += 1
+
+    depth = 0
+    parts: list[str] = []
+    deleted = False
+    for node in scope.iter(f"{W}fldChar", f"{W}instrText"):
+        if node.tag == f"{W}instrText":
+            if depth > 0:
+                parts.append(node.text or "")
+            continue
+        kind = node.get(f"{W}fldCharType")
+        if kind == "begin":
+            depth += 1
+            if depth == 1:
+                deleted = skip_deleted and in_tracked_deletion(node)
+        elif kind == "end" and depth > 0:
+            depth -= 1
+            if depth == 0:
+                if not deleted:
+                    found[" ".join("".join(parts).split())] += 1
+                parts = []
+    return found
 
 
 def is_layout_break(node: etree._Element) -> bool:
