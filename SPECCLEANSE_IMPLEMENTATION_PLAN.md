@@ -1874,6 +1874,44 @@ The implementer and reviewer must jointly provide:
 
 No release tag, push, publication, or deployment is part of this completion report.
 
+### 17.6 What W10 found
+
+**§17.1's fixture warning was justified, and the defect was live.** Every generated
+part marked `w14` ignorable without declaring it:
+
+```
+declared prefixes:      mc, r, v, w, wp
+mc:Ignorable names:     w14
+NAMED BUT NOT DECLARED: w14
+```
+
+Markup Compatibility requires every prefix in `mc:Ignorable` to be declared, so every
+fixture in the suite was non-conformant in that respect. No existing test looked, and
+it would have mattered most at exactly the point §17.3 uses these documents as Word
+positive controls — a rejection would have said nothing about the change under test.
+
+**Three of §17.4's four named contradictions were present**, each stating the opposite
+of the code: tail-text preservation (twice in `CLAUDE.md`, contradicted by a section
+between them), `patterns.yaml` "must be in the same directory as `gui.py`" (false in
+the frozen build where it matters), and the README's "keeps document structure intact"
+(a guarantee no content remover can make). `verify.py`'s module description still
+described the pre-W03 contract. The fourth — the breadth of what a PASS proves — was
+already stated correctly in the README and needed no change.
+
+**§17.2 and §17.3 are outstanding, not complete.** No specification corpus and no
+Windows Word were available at any point. §17.2 explicitly permits finishing the
+synthetic and code work and labelling corpus validation outstanding, which is what
+`IMPLEMENTATION_REPORT.md` does; it does not permit inventing percentages, and none
+appear anywhere in this work.
+
+**The report's own limitation, recorded because §6 asks for it.** §17.5 requires the
+implementer and reviewer to report *jointly*. Both roles were carried out by the same
+agent, so the independence that separation exists to provide was absent. An automated
+reviewer on every pull request partly substituted, finding a real defect on eight of
+the nine packages it saw — two of them false negatives that would have reported
+damaged output as verified. That record argues for the separation rather than against
+needing it.
+
 ## 18. Consolidated acceptance checklist
 
 ### W00 — immediate corrections

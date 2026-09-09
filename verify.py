@@ -2,22 +2,49 @@
 SpecCleanse Verification Module
 
 Compares an input DOCX with its cleaned output and reports what the clean
-actually did to the document.  Three questions are asked:
+actually did to the document.
 
-  1. Which paragraphs disappeared, and does each one match a rule that was
-     meant to remove it?
-  2. Which surviving paragraphs lost text, and was the lost fragment
-     something a rule asked for?  (Inline placeholder redaction lands here.)
-  3. Is the output still a document Word will open?
+**The contract is source evidence.**  Verification asks what the *configured
+policy permits losing from the input*, then checks the output against that.  It
+never asks the processor what it did: the cleaner's account of its own work
+cannot be the evidence that the work was right, because a bug in the processor
+would report itself as intended.  `DetectionEngine.paragraph_evidence()`
+produces that evidence as a pure read of one source paragraph, and what it
+carries — and a flattened list of patterns could not — is **scope**: a hidden
+run authorizes losing its own characters and nothing beside them.
 
-Question 1 shares its compiled patterns with the detection engine, so it
-agrees with the cleaner by construction instead of through a second, drifting
-copy of the same regexes.  That makes it a consistency check, not an
-independent one: a rule that removes the wrong thing is reported as expected.
-The two genuinely independent checks are the formatting signals read from the
-source DOCX and the structural inspection, which is the only layer that can
-see damage no pattern describes — an emptied footer, a lost section break, a
-field left half-open.
+Reading the *output's* structure is not a breach of that boundary.  The output
+package is the artifact being judged; what is forbidden is trusting the
+processor's narration of how it got there.
+
+Five things are reported:
+
+  1. Paragraphs that disappeared, each classified against the evidence — a
+     detector name, a tracked deletion, a preserve violation, or unexplained.
+  2. Surviving paragraphs that lost text, where every lost interval must be
+     *covered by* an authorized one rather than merely resemble something
+     removable.  Inline placeholder redaction lands here.
+  3. Structural problems the output has and the input did not: an emptied
+     container, a lost section break, a half-open field, a table left with no
+     rows, a field carrier gone.
+  4. Cross-references this run broke — a surviving `REF` naming a bookmark the
+     output no longer defines.
+  5. Removed paragraphs that took part in automatic numbering.  Its own
+     category, because nothing was lost; what a reader sees may differ.
+
+**What a PASS does and does not establish.**  It says every difference between
+input and output was accounted for by the configured rules, and that the
+checked structural comparisons found nothing the input did not already have.
+It is a consistency check, not an independent one: verification shares its
+compiled patterns with the detection engine, so a rule that removes the wrong
+thing is reported as expected — which is why `config_notices` makes a file with
+unusual rules need review however cleanly it compares.
+
+It is emphatically **not** a statement that Word will open the file.  The
+structural inspection covers the shapes it has rules for, and a clean lint is
+not evidence a package is valid: a table emptied of its last row passed every
+check here until W06 gave the lint a rule for it.  Word remains the only
+authority on that question.
 """
 
 import difflib

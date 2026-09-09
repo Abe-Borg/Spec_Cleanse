@@ -111,6 +111,16 @@ set in three places that must agree — the shipped YAML, `PatternConfig` and
 in `verify_clean` — and a test asserts each. Tests that depend on the switch state it
 explicitly rather than leaning on whichever way the default points.
 
+**A confidence score is what the *cleaner* acts on; it is not what verification
+checks against.** The two are related but not the same question, and conflating them
+is what the source-evidence contract exists to prevent. The score decides whether the
+processor removes something. Verification instead asks
+`DetectionEngine.paragraph_evidence()` what the configured policy *permits* losing
+from the source paragraph, and that answer carries **scope** — which run's characters,
+which intervals — that a single number never could. A paragraph scoring 0.8 on a rule
+that qualified against one hidden run inside it does not thereby authorize losing the
+requirement beside it.
+
 `load_config()` validates the options where a mistake would otherwise fail silently.
 A key in `BOOLEAN_KEYS` must be a real Boolean, because YAML makes `'false'` a
 *string* and every reader asks a plain truthiness question — so a quoted "off"
@@ -445,7 +455,7 @@ Errors accumulate in result objects; processing doesn't halt on non-fatal issues
 The project uses `lxml` for direct XML manipulation rather than `python-docx`. This gives lower-level control needed for:
 - Preserving exact formatting through XML structure
 - Handling Word namespace complexity
-- Safe element removal with tail-text preservation
+- Safe element removal, with the structural rules Word requires (see below — there is deliberately *no* tail-text handling, and the reason is recorded there)
 
 ### XML Namespace Handling
 
@@ -858,7 +868,7 @@ Add the pattern to `editorial_artifacts.inline_patterns`. No code change is need
 
 - Always test with documents containing headers, footers, and footnotes
 - Verify namespace handling — Word uses many namespaces
-- Handle tail text preservation when removing elements
+- Do **not** add tail-text handling: in WordprocessingML an element tail is only inter-element whitespace, so preserving it protects nothing. This line used to say the opposite
 - Never modify XML during iteration; collect targets first, then remove
 
 ## Important Caveats
@@ -867,7 +877,7 @@ Add the pattern to `editorial_artifacts.inline_patterns`. No code change is need
 - **Direct XML manipulation** — not using `python-docx`, so changes must be XML-aware
 - **No structural/style optimization** — those stages were retired; the cleaner only removes content
 - **Temp files** are created with `tempfile.mkdtemp(prefix="speccleanse_")` and cleaned up in `finally` blocks
-- **`patterns.yaml`** must be in the same directory as `gui.py`, and is always read as UTF-8 — it contains `©`, `–` and `—`, which the Windows default encoding silently mangles
+- **`patterns.yaml`** is found through `apppaths.resolve_config_path()`, *not* by assuming a directory. From source that is the file beside the modules; frozen, a copy beside the `.exe` wins, else a per-user copy under `%APPDATA%\SpecCleanse`. It is always read as UTF-8 — it contains `©`, `–` and `—`, which the Windows default encoding silently mangles
 - **Toggle properties** (`w:i`, `w:b`, `w:vanish`) are on when present *without* `w:val`, and off when `w:val` is `0`/`false`/`off`. Use `docx_xml.is_on()`/`toggle_on()`, never a bare `find(...) is not None`
 - **Toggle properties inherited through styles do not accumulate.** Along a `w:basedOn` chain they XOR: a style that repeats its base style's `<w:vanish/>` switches hidden back *off*, and Word renders that text normally. `StyleIndex.is_hidden()` implements that, and treats an explicit `w:val="0"` anywhere in the chain as off — where the spec leaves room, take the reading that keeps text
 - **Tracked deletions are not all marked up the same way.** A deleted run holds `w:delText`, which no extractor reads; a deleted table *row* keeps ordinary `w:t` and records the deletion only in `w:trPr` (cells use `w:cellDel`). Accepting revisions therefore has to remove the row or cell whole, not just the marker

@@ -12,12 +12,21 @@ from xml.sax.saxutils import escape
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 
+#: Namespace declarations every generated part carries.
+#:
+#: ``w14`` is declared even though nothing here emits a ``w14:`` element,
+#: because ``mc:Ignorable`` names it.  Markup Compatibility (ECMA-376 Part 3)
+#: requires every prefix listed there to be a declared namespace prefix, and
+#: an undeclared one makes the part non-conformant — so a fixture written that
+#: way is not a valid positive control for Word validation, whatever else it
+#: proves.  It named ``w14`` without declaring it until §17.1 asked.
 NS_DECL = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
     'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
     'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
     'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
     'xmlns:v="urn:schemas-microsoft-com:vml" '
+    'xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" '
     'mc:Ignorable="w14"'
 )
 
@@ -31,13 +40,41 @@ RELS = XML_HEAD + (
     '</Relationships>'
 )
 
-DOC_RELS = XML_HEAD + (
-    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
-    '<Relationship Id="rId10" '
-    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" '
-    'Target="comments.xml"/>'
-    '</Relationships>'
-)
+#: Relationship types for the parts a fixture may carry, keyed by the file name
+#: relative to ``word/``.  A relationship is written **only** when its target is
+#: actually in the package: a relationship naming a part that is not there is a
+#: dangling one, which is exactly what
+#: ``test_revisions.test_package_bookkeeping_is_updated`` asserts the *cleaner*
+#: must never leave behind.  The builder used to emit the comments relationship
+#: unconditionally, so every fixture without comments was invalid in the way the
+#: project already treats as breaking.
+_RELATIONSHIP_TYPE = {
+    "comments.xml": "comments",
+    "footnotes.xml": "footnotes",
+    "endnotes.xml": "endnotes",
+    "styles.xml": "styles",
+}
+
+_REL_BASE = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/"
+
+
+def _document_rels(part_names) -> str:
+    """Relationships from ``word/document.xml`` to the parts that exist."""
+    relationships = []
+    for index, part_name in enumerate(sorted(part_names), start=10):
+        inside_word = part_name.removeprefix("word/")
+        kind = _RELATIONSHIP_TYPE.get(inside_word)
+        if kind is None:
+            continue
+        relationships.append(
+            f'<Relationship Id="rId{index}" Type="{_REL_BASE}{kind}" '
+            f'Target="{inside_word}"/>'
+        )
+    return XML_HEAD + (
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(relationships) +
+        '</Relationships>'
+    )
 
 _CONTENT_TYPE = {
     "document": "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
@@ -311,7 +348,7 @@ def build_docx(path: Path, document_xml: str, extra_parts: dict[str, str] | None
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("[Content_Types].xml", content_types)
         zf.writestr("_rels/.rels", RELS)
-        zf.writestr("word/_rels/document.xml.rels", DOC_RELS)
+        zf.writestr("word/_rels/document.xml.rels", _document_rels(parts))
         for part_name, xml in parts.items():
             zf.writestr(part_name, xml)
 
