@@ -644,6 +644,19 @@ def can_delete_paragraph(para: etree._Element) -> bool:
     False when removal would empty a container Word requires to hold block
     content, or would leave a table cell whose last child is not a paragraph.
     Callers strip the paragraph's content in place instead.
+
+    Both questions are answered by scanning until the answer is known rather
+    than by materialising the parent's whole block list.  That list was rebuilt
+    once per removal, so a body of n paragraphs losing k of them did O(k*n)
+    work: 56% of cleaning time at 4,000 paragraphs, and the cost §16.3 names.
+
+    This is **not** constant time, and §16.3 is explicit that claiming so would
+    be wrong: each scan walks siblings until it finds a block, which is one or
+    two steps in a real document and unbounded in principle.  What it is not is
+    proportional to the container's size on every call.
+
+    Nothing is cached.  Removal mutates the tree as it goes, and a count kept
+    across mutations would answer for a document that no longer exists.
     """
     parent = para.getparent()
     if parent is None:
@@ -652,18 +665,22 @@ def can_delete_paragraph(para: etree._Element) -> bool:
     if parent.tag not in BLOCK_CONTAINERS:
         return True
 
-    remaining = [child for child in block_children(parent) if child is not para]
-    if not remaining:
-        return False
+    if parent.tag != TC_TAG:
+        # Only "would anything block-level be left?", so stop at the first
+        # block that is not this paragraph.
+        return any(
+            child.tag in BLOCK_LEVEL_TAGS and child is not para
+            for child in parent
+        )
 
-    if parent.tag == TC_TAG:
-        # A cell must contain at least one paragraph and must end with one.
-        if not any(child.tag == P_TAG for child in remaining):
-            return False
-        if remaining[-1].tag != P_TAG:
-            return False
-
-    return True
+    # A cell must still *end* with a paragraph, so the last remaining block is
+    # the whole question — and a cell ending in a paragraph necessarily still
+    # contains one, which is why the old "is there any paragraph?" pass was
+    # already implied by this one.
+    for child in reversed(parent):
+        if child.tag in BLOCK_LEVEL_TAGS and child is not para:
+            return child.tag == P_TAG
+    return False
 
 
 def field_chars_balanced(elem: etree._Element) -> bool:

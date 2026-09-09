@@ -28,7 +28,7 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
 | `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
-| `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
+| `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `benchmark_pipeline` (timings on synthetic fixtures, all eight §16.1 families; **not** the corpus harness), `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
 | `legacy/deep_cleaner.py` | Archived; not used |
 | `legacy/style_cleaner.py` | Archived; not used |
 
@@ -241,6 +241,48 @@ extent is validated rather than assumed: `_in_tracked_deletion` requires the mar
 on the enclosing `w:tr` or `w:tc`, so a revision somewhere nearby is not blanket
 permission. With the option off the authority does not exist, and the same loss is
 a violation again.
+
+### Comparing Large Documents
+
+Three costs were quadratic in paragraph count, and each was hidden behind the
+one before it. They are recorded together because the order they were found in
+is the lesson: a profile taken before the previous fix is a profile of a
+different program.
+
+**The paragraph alignment.** `difflib` treats every occurrence of a repeated
+text as a candidate for every other, so `find_longest_match` was 94% of
+verification — 21 seconds on 2,000 paragraphs of repeated headings.
+`_pure_deletion_pairing()` skips it: where every output paragraph matches an
+input paragraph exactly, in order, nothing was modified and nothing invented, so
+a greedy left-to-right scan finds the alignment in O(n). Greedy is not a
+heuristic here — if an in-order embedding exists, matching each output paragraph
+to the earliest unused input paragraph finds one.
+
+**It matches on `signature`, not on text, and that is the whole safety of it.**
+Written on text, it paired a surviving *hidden* note with the plain requirement
+that had actually been deleted — a lost requirement reported as a verified
+clean. Signatures are stricter than text, which is the safe direction: a
+modification, an addition, a reordering or a reshaped run all fall through to
+the ordinary comparison unchanged. It adds a fast path; it removes no reasoning.
+
+**`_lost_signatures` and `_attribute_removal` group once.** The first rescanned
+both documents for every distinct text, the second rescanned every paragraph for
+every removal. Neither mattered while the matcher dominated; together they were
+88% of verification once it did not.
+
+**`can_delete_paragraph` scans instead of listing.** It materialised the
+parent's whole block-child list per removal — 56% of *cleaning* time. It now
+stops at the first remaining block, and for a table cell scans backwards for the
+last one, which subsumes the old separate "is there any paragraph?" pass. This
+is **not** constant time and must not be described as such: it still walks
+siblings until it finds a block. Nothing is cached, because removal mutates the
+tree as it goes and a count kept across mutations would answer for a document
+that no longer exists.
+
+`tools/benchmark_pipeline.py` is how any of this is re-measured. Its fixture
+families are labelled: `adversarial_headings` is the worst case by
+construction, `realistic_requirements` is the closest thing to a real document,
+and a change must not be judged on the first alone.
 
 ### Location, and Which Occurrence Went
 

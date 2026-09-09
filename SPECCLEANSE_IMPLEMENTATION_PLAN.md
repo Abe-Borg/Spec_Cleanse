@@ -1680,6 +1680,78 @@ implementation still walks an unbounded sibling chain.
 **Exit gate:** large-input verification is measurably better on the corrected behavior across at least
 the adversarial and realistic families, and no safety property was traded away to obtain it.
 
+### 16.5 What W09 found
+
+**§16.1's insistence on re-measuring first was right, and it changed the answer.** The plan's profile
+predates W03–W07, which rewrote the comparison. Re-measured on the current build, the bottleneck was
+still where §16.2 said — `difflib.find_longest_match` at 94% of verification — but two more quadratics
+were hiding *behind* it and became dominant the moment it went. Optimising on the old profile would
+have stopped after the first one.
+
+**§16.2's suggested algorithm was built, measured, and removed.** Unique-anchor alignment with a
+patience/LIS subsequence, admitting exact permitted transformations as anchors, is what the section
+describes. It changed nothing measurable anywhere:
+
+```
+no_anchors        2000   1.255 -> 1.246 s
+many_placeholders 2000   1.296 -> 1.279 s
+adversarial       2000  21.192 -> 21.099 s
+```
+
+The reason is structural, not an implementation flaw. Families 4 and 5 have unique text throughout, so
+`difflib` was never slow on them; and the adversarial family — three distinct strings across the whole
+document — has **no unique paragraph at all**, so no anchor can exist there by construction. §16.2
+anticipates exactly this ("the duplicate-bucket evidence does not make it the proven answer", and
+family 4 "is the reason duplicate-bucket evidence does not by itself establish patience/LIS as the
+answer") and prefers a simpler approach that passes the same workloads.
+
+What replaced it is narrower and targets the measured cost. Where the output is a **pure deletion** —
+every output paragraph matching an input paragraph exactly, in order — nothing was modified and nothing
+invented, so a greedy O(n) scan finds the alignment. Greedy is not a heuristic: if an in-order
+embedding exists, matching each output paragraph to the earliest unused input paragraph finds one.
+
+**It must match on the paragraph signature, not its text**, and that is the difference between a fast
+path and a broken one. Written on text, it paired a surviving *hidden* note with the plain requirement
+that had actually been deleted, turning a lost requirement into a verified clean. Both W04
+discriminating cases caught it; no timing test would have. Signatures are stricter, which is the safe
+direction — anything the scan declines takes the ordinary path unchanged.
+
+**The two hidden quadratics.** `_lost_signatures` rescanned both sides for every distinct text
+(O(distinct × n), so O(n²) on mostly-unique documents) and `ParagraphInfo.text` recomputed
+`raw_text.strip()` 31 million times in one 4,000-paragraph run. `_attribute_removal` rescanned every
+paragraph for every removal (O(removals × n)). Both are one-pass groupings now.
+
+**§16.3's prediction held exactly**: once verification was fast, `can_delete_paragraph` was 56% of
+*cleaning*, materialising the parent's whole block list per removal. Answering by scanning until the
+answer is known is 16× faster on the adversarial family at 12,000 paragraphs, and is deliberately not
+described as constant time — it still walks siblings until it finds a block.
+
+Measured results, this machine, seconds:
+
+| family | 2,000 before | 2,000 after | 12,000 after |
+|---|---|---|---|
+| adversarial_headings (verify) | 21.192 | 0.203 | 1.38 |
+| repeated_requirements (verify) | 21.571 | ~0.20 | — |
+| realistic_requirements (verify) | 1.049 | 0.327 | 2.15 |
+| adversarial_headings (clean) | 0.252 | 0.090 | 0.50 |
+
+Growth on the adversarial family fell from ~n^2.8 to ~n^1.5. **The realistic family's 3.2× is the
+number that matters most**: §16.4 forbids gating on the adversarial family alone, and it is the only
+one of the two that resembles a real document. Small documents show no regression at 50 and 200
+paragraphs over five runs.
+
+**What this does not establish.** The 12,000-paragraph *baseline* was never run — by the measured curve
+it would have taken roughly three quarters of an hour — so the improvement factor at that size is
+extrapolated, not observed, and is stated that way. All fixture families remain synthetic: no real
+specification was measured, the same corpus gap standing since W02. And the numbers are one machine and
+one interpreter; §16.4's targets are review targets, and none of this is asserted in CI as wall-clock
+seconds.
+
+The deterministic regressions §16.4 asks for are work counts, not timings: the number of
+`SequenceMatcher` alignments built (zero on the problematic pattern, non-zero on every shape that must
+fall back), and an exhaustive comparison of the container scan against the implementation it replaced
+over 2,191 paragraph decisions.
+
 ## 17. W10: integrated validation and documentation
 
 ### 17.1 Automated validation layers

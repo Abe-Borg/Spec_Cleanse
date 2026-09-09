@@ -463,7 +463,19 @@ python -m tools.census_references /path/to/specs
 # Record what this build decides, change something, and diff the two.
 python -m tools.corpus_compare record baseline.json /path/to/specs
 python -m tools.corpus_compare diff baseline.json candidate.json
+
+# How long does the pipeline take, and where? Synthetic fixtures, no corpus.
+python -m tools.benchmark_pipeline
+python -m tools.benchmark_pipeline --family realistic_requirements --sizes 2000,12000
 ```
+
+`benchmark_pipeline` builds its own documents, so it needs no specifications and
+tells you nothing about your own. Its families are deliberately unequal:
+`adversarial_headings` repeats three paragraph texts through the whole document
+and is the worst case by construction, while `realistic_requirements` is mostly
+unique text with sparse editorial notes and is the closest thing to a real
+specification. A change judged on the first alone can regress the second.
+Timings are comparable only within one machine, interpreter and configuration.
 
 Recordings and census output carry excerpts of the documents they measured.
 Specifications are usually proprietary — keep them in a scratch directory and do not
@@ -489,6 +501,7 @@ Spec_Cleanse/
 ├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
 ├── tools/              # Developer measurement utilities (not imported by the app)
+│   └── benchmark_pipeline.py  # Pipeline timings on synthetic fixtures
 │   ├── census_formatting.py   # Cost of turning formatting-only removal off
 │   ├── census_references.py   # Removals inside referenced bookmark ranges
 │   └── corpus_compare.py      # Record decisions, diff two builds

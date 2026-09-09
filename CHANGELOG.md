@@ -124,6 +124,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   More editorial text survives as a result. That is the intended trade: a
   retained note costs noise in whatever reads the cleaned file, a deleted
   requirement is not recoverable from it.
+- **Large documents verify in a fraction of the time.** Verification of a
+  2,000-paragraph document full of repeated headings went from 21 seconds to
+  0.2; a 12,000-paragraph one is now under 1.5 seconds where the old code would
+  have taken roughly three quarters of an hour by its own measured growth curve.
+  Cleaning the same document went from 8.1 seconds to 0.5. A document of mostly
+  unique requirements — the shape a real specification takes — verifies about
+  three times faster.
+
+  Three costs, all of them quadratic in the number of paragraphs. The
+  paragraph-alignment search treated every occurrence of a repeated text as a
+  candidate for every other; where the output is a pure deletion, that search
+  is now skipped entirely for a single ordered pass. Behind it sat two more:
+  the per-text signature inventory rescanned both documents for every distinct
+  paragraph, and removal attribution rescanned every paragraph for every
+  removal. Both are single passes now. Finally `can_delete_paragraph` listed a
+  container's entire contents on every removal, and now stops as soon as the
+  answer is known.
+
+  **No verdict changed.** Every difference is still classified the same way:
+  the fast path matches on the paragraph's full signature rather than its text,
+  so a surviving hidden note can never stand in for a deleted requirement, and
+  anything it declines — a modification, an addition, a reordering, a reshaped
+  run — takes the original path unchanged. The injected-damage cases all still
+  fail for their stated reasons.
+
 - **`patterns.yaml` is checked for the mistakes that used to fail silently.** A
   Boolean option must now be a real Boolean: YAML makes `formatting_only_removal:
   'false'` a *string*, and every reader asks a plain truthiness question, so
@@ -399,9 +424,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so they have not yet been pointed at one. Any decision taken about the
   formatting-only default or the scope of reference protection must record
   whether it had census data or was a judgement call without it.
-- Suite baseline at the time of writing: 388 passed, 15 skipped, 0 expected
+- Performance figures quoted above are from one machine and one interpreter,
+  on synthetic fixtures. They are review targets, not thresholds asserted in
+  CI, and no real specification corpus has been measured.
+- Suite baseline at the time of writing: 437 passed, 15 skipped, 0 expected
   failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the fifteen GUI
-  skips run, so the counts there are 388 passed and 0 skipped. Every case that
+  skips run, so the counts there are 437 passed and 0 skipped. Every case that
   was carried under `unittest.expectedFailure` has since been closed by the
   package its docstring named. An expected failure is not a failure and an
   unexpected success is; they are tracked separately for that reason.
