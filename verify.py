@@ -37,6 +37,7 @@ from docx_xml import (
     W,
     block_children,
     collect_content_parts,
+    bookmark_names,
     field_chars_balanced,
     field_instructions,
     in_tracked_deletion,
@@ -44,6 +45,7 @@ from docx_xml import (
     iter_paragraphs,
     note_identity,
     paragraph_signature,
+    referenced_names,
     run_profile,
     run_text,
     load_config,
@@ -212,6 +214,18 @@ class StructureReport:
     #: header; by instruction rather than by a count, because a document-wide
     #: total hides one field going while another arrives.
     fields: Counter = field(default_factory=Counter)
+    #: Bookmark names defined anywhere in the package, and the names something
+    #: still points at.  Document-wide, not per part, because a reference in a
+    #: header legitimately names a bookmark in the body — the opposite of the
+    #: field inventory above, and for the opposite reason.
+    bookmarks: set = field(default_factory=set)
+    #: Case-folded name -> the name as written, so a report names what someone
+    #: would search the document for rather than the key it was matched on.
+    references: dict = field(default_factory=dict)
+
+    def broken_references(self) -> set:
+        """Names something points at that no bookmark defines."""
+        return set(self.references) - self.bookmarks
 
 
 @dataclass
@@ -405,6 +419,10 @@ def inspect_structure(docx_path: Path, strip_revisions: bool = False) -> Structu
             for instruction, count in field_instructions(root, strip_revisions).items():
                 report.fields[(part, instruction)] += count
 
+            report.bookmarks |= bookmark_names(root)
+            for folded, written in referenced_names(root).items():
+                report.references.setdefault(folded, written)
+
         return report
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -441,6 +459,22 @@ def _compare_structure(
         violations.append(
             StructuralViolation("section break(s) lost from the document", lost_sections)
         )
+
+    # A reference the clean broke: something still names a bookmark that the
+    # output no longer defines, and the input did define.  Only what this run
+    # broke is reported — a reference already dangling on the way in is the
+    # document's own problem, the same rule the issue counts above follow.
+    #
+    # There is deliberately no tracked-deletion exemption here, unlike the field
+    # inventory.  Accepting a revision that deletes a referenced target is a
+    # requested text deletion with an unrequested consequence, and the
+    # consequence is what needs review.
+    for name in sorted(before.broken_references() ^ after.broken_references()):
+        if name in after.broken_references() and name in before.bookmarks:
+            violations.append(StructuralViolation(
+                "reference broken — no bookmark named "
+                f"{{{after.references.get(name, name)}}}"
+            ))
 
     # A field carrier can vanish while the text stays identical — the cached
     # result reads as ordinary words, so nothing else in the comparison sees it

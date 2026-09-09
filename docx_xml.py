@@ -270,6 +270,73 @@ def has_embedded_content(elem: etree._Element) -> bool:
 LAYOUT_BREAK_TYPES = frozenset({"page", "column"})
 
 
+#: Field keywords whose first argument names a bookmark.  Deliberately short:
+#: a general Word field evaluator is not wanted here, only enough grammar to
+#: say which bookmark a reference consumes.
+REFERENCE_KEYWORDS = frozenset({"REF", "PAGEREF", "NOTEREF"})
+
+#: One field-instruction token: a quoted string, or a run of non-space.
+_INSTRUCTION_TOKEN = re.compile(r'"([^"]*)"|(\S+)')
+
+
+def reference_target(instruction: str) -> str | None:
+    """The bookmark a field instruction refers to, or None if it refers to none.
+
+    Handles the quoted form Word writes for a name containing spaces.  Anything
+    that is not one of :data:`REFERENCE_KEYWORDS` followed by a name is None —
+    including a switch where the name should be, which is a malformed reference
+    rather than a reference to a bookmark called ``\\h``.
+
+    This reads an instruction that a field carrier actually held.  Ordinary
+    prose containing the word "REF" is never a field and never reaches here.
+    """
+    tokens = [
+        quoted if quoted is not None else bare
+        for quoted, bare in (
+            (m.group(1), m.group(2)) for m in _INSTRUCTION_TOKEN.finditer(instruction)
+        )
+    ]
+    if len(tokens) < 2 or tokens[0].upper() not in REFERENCE_KEYWORDS:
+        return None
+    target = tokens[1]
+    return None if target.startswith("\\") else target
+
+
+def bookmark_names(scope: etree._Element) -> set[str]:
+    """Every bookmark name defined in ``scope``, case-folded.
+
+    Word matches bookmark names case-insensitively, so the inventory does too.
+    """
+    return {
+        name.casefold()
+        for element in scope.iter(f"{W}bookmarkStart")
+        if (name := element.get(f"{W}name"))
+    }
+
+
+def referenced_names(scope: etree._Element) -> dict[str, str]:
+    """Bookmark names something in ``scope`` still points at.
+
+    Keyed by the case-folded name, because Word matches bookmarks that way, and
+    valued by the name as written, because that is what someone has to search
+    the document for.
+
+    Two kinds of consumer are supported: a reference field, simple or complex,
+    and an internal hyperlink, which names its target in ``w:anchor`` rather
+    than through a field at all.
+    """
+    found: dict[str, str] = {}
+    for instruction in field_instructions(scope):
+        target = reference_target(instruction)
+        if target:
+            found.setdefault(target.casefold(), target)
+    for link in scope.iter(f"{W}hyperlink"):
+        anchor = link.get(f"{W}anchor")
+        if anchor:
+            found.setdefault(anchor.casefold(), anchor)
+    return found
+
+
 def in_tracked_deletion(node: etree._Element) -> bool:
     """True if accepting revisions would take ``node`` with it.
 
