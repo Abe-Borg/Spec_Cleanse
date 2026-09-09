@@ -23,6 +23,7 @@ from batch import (
     BatchPlan,
     FileOutcome,
     FileReport,
+    ReviewCategory,
     describe_categories,
     plan_batch,
     run_batch,
@@ -140,6 +141,7 @@ def _clean_one(
     engine: DetectionEngine,
     log,
     strip_revisions: bool = False,
+    configuration_notice: bool = False,
 ) -> FileReport:
     """Run single-pass content removal on a single file.
 
@@ -151,6 +153,12 @@ def _clean_one(
     "Needs review" on its own is not something a user can act on, so the
     report also names the categories behind it — reading the document, fixing
     the configuration and checking a cross-reference are three different jobs.
+
+    ``configuration_notice`` says the rules that produced this file are worth
+    knowing about, and it is decided once per run rather than per file: the
+    configuration cannot change between two files in one batch.  It is passed
+    in rather than read from the engine here so that the notices are computed
+    and logged in exactly one place.
     """
     processor = DocxProcessor(engine, verbose=False, strip_revisions=strip_revisions)
 
@@ -195,11 +203,28 @@ def _clean_one(
     log(f"  Done: {len(vresult.removed)} paragraph(s) removed,"
         f" {vresult.removed_characters:,} characters of text taken out")
 
-    if vresult.passed:
+    # ``passed`` stays the authority on whether the comparison is content with
+    # the output, and the categories explain it.  Deriving the verdict from the
+    # categories instead would look equivalent — today it is — and would fail
+    # silently the moment something new contributes to ``passed`` without a
+    # category to match: a real failure would report Verified.  A test asserts
+    # the two agree.
+    if vresult.passed and not configuration_notice:
         return FileReport(FileOutcome.VERIFIED, output_written=True)
 
     categories = vresult.review_categories()
-    log(f"  NEEDS REVIEW ({describe_categories({c: 1 for c in categories})})"
+    if configuration_notice:
+        # Nothing in a comparison of two documents can see this, which is why
+        # verification does not report it.  It belongs to the outcome all the
+        # same: a run with formatting-only removal switched on, or with a rule
+        # still active that was narrowed for deleting requirements, produced
+        # this file under rules that can remove text no content evidence
+        # supports.  A clean comparison against those rules is agreement with
+        # them, not a reason to hand the file on unread.
+        categories.add(ReviewCategory.CONFIGURATION)
+
+    named = describe_categories({c: 1 for c in categories}) or "uncategorised"
+    log(f"  NEEDS REVIEW ({named})"
         f" — the cleaned file was written: {output_path}")
     return FileReport(
         FileOutcome.NEEDS_REVIEW, frozenset(categories), output_written=True
@@ -752,10 +777,16 @@ class SpecCleanseGUI:
             # thread started.  run_batch is handed that manifest and never
             # recomputes a destination: the selection and output folder are
             # live widgets the user can change mid-run.
+            # Decided once: the configuration cannot change between two files
+            # in one batch, and the notices themselves are logged by
+            # _load_engine rather than repeated per file.
+            notice = bool(config_notices(engine.config))
+
             tally = run_batch(
                 items,
                 lambda item: _clean_one(
-                    item.source, item.destination, engine, self._log, strip_revisions
+                    item.source, item.destination, engine, self._log,
+                    strip_revisions, notice,
                 ),
                 self._log,
                 announce,

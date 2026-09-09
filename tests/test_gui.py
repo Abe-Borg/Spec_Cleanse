@@ -148,5 +148,85 @@ class WorkerTests(DocxTestCase):
             gui.CONFIG_PATH = original
 
 
+    def test_a_configuration_notice_makes_a_clean_file_need_review(self):
+        # Nothing is wrong with the output: the comparison passes.  What is
+        # worth knowing is that these rules can remove text on no content
+        # evidence at all, so agreeing with them is not a reason to hand the
+        # file on unread.
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+        engine = self.make_engine(specifier_notes={"formatting_only_removal": True})
+
+        outcome = gui._clean_one(
+            path, out, engine, self.log, configuration_notice=True
+        )
+
+        self.assertIs(outcome.outcome, FileOutcome.NEEDS_REVIEW)
+        self.assertEqual(outcome.categories, frozenset({ReviewCategory.CONFIGURATION}))
+        self.assertIn("NEEDS REVIEW (1 configuration notice)", self.output)
+        self.assertTrue(outcome.output_written)
+
+    def test_the_same_file_without_the_notice_verifies(self):
+        # The guard against the case above being satisfied by a check that
+        # simply never reports Verified.
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+
+        outcome = gui._clean_one(path, out, self.make_engine(), self.log)
+
+        self.assertIs(outcome.outcome, FileOutcome.VERIFIED)
+
+    def test_a_configuration_notice_is_added_to_real_findings(self):
+        # Two independent concerns.  Showing only one would be the pooling the
+        # category split exists to end.
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+        failing = verify.VerificationResult(input_path=path, output_path=out)
+        failing.removed.append(verify.RemovedParagraph("A real requirement.", None))
+
+        with patch.object(gui, "verify_clean", return_value=failing):
+            outcome = gui._clean_one(
+                path, out, self.make_engine(), self.log, configuration_notice=True
+            )
+
+        self.assertEqual(outcome.categories, frozenset({
+            ReviewCategory.CONFIGURATION, ReviewCategory.DETECTED_DAMAGE,
+        }))
+
+    def test_a_failing_verification_always_names_at_least_one_category(self):
+        # The anti-drift guard.  _clean_one takes `passed` as the authority and
+        # the categories as the explanation; if something new ever contributes
+        # to `passed` without a category to match, a real failure would be
+        # reported with an empty reason.  Every contributor is checked here.
+        path = self.build(DOCUMENT)
+        out = self.temp_dir / "out.docx"
+        cases = {
+            "unexpected removal": lambda r: r.removed.append(
+                verify.RemovedParagraph("A real requirement.", None)),
+            "preserve violation": lambda r: r.removed.append(
+                verify.RemovedParagraph("PART 1 - GENERAL", verify.PRESERVE_VIOLATION)),
+            "unexpected modification": lambda r: r.modified.append(
+                verify.ModifiedParagraph("before", "be", ["fore"])),
+            "structural": lambda r: r.structural.append(
+                verify.StructuralViolation("a footer left empty")),
+            "reference": lambda r: r.structural.append(
+                verify.StructuralViolation("reference broken", kind="reference")),
+            "added": lambda r: r.added.append("Provide gold sprinklers."),
+            "numbering": lambda r: r.numbering.append(
+                verify.NumberingNotice("word/document.xml", "1", "an item")),
+        }
+
+        for name, damage in cases.items():
+            with self.subTest(name):
+                result = verify.VerificationResult(input_path=path, output_path=out)
+                damage(result)
+
+                self.assertFalse(result.passed, f"{name} should not pass")
+                self.assertTrue(
+                    result.review_categories(),
+                    f"{name} fails verification but names no category",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
