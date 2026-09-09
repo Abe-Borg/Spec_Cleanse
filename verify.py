@@ -30,6 +30,7 @@ from pathlib import Path
 
 from lxml import etree
 
+from apppaths import resolve_config_path
 from batch import ReviewCategory
 from detection import DetectionEngine, ParagraphEvidence
 from docx_xml import (
@@ -651,7 +652,9 @@ def verify_clean(
     Args:
         input_path:  Original DOCX before cleaning.
         output_path: Cleaned DOCX after processing.
-        config_path: Path to patterns.yaml (auto-detected if None).
+        config_path: Path to patterns.yaml.  Consulted only when no engine is
+                     supplied; resolved through ``apppaths`` when both are
+                     absent.
         engine:      The engine that did the cleaning.  Passing it keeps
                      verification and detection on one set of patterns; if it
                      is omitted an equivalent engine is built from the config.
@@ -662,10 +665,23 @@ def verify_clean(
         VerificationResult with every removal, modification, and structural
         violation classified.
     """
+    # Precedence, unchanged and now stated: an engine wins outright, an
+    # explicit path comes next, and only with neither is the location resolved.
+    #
+    # The resolver is called *lazily* on purpose.  It can seed a per-user
+    # patterns.yaml on first run, and a caller that supplied its own engine or
+    # its own path has asked for neither that file nor that side effect.
+    #
+    # `Path(__file__).parent` was the old fallback and is wrong in a frozen
+    # build: it names PyInstaller's extraction directory, which is temporary and
+    # is not where the user's file lives.  An engine-less caller — a test, a
+    # census tool, a future harness — would have verified against the shipped
+    # defaults while the cleaner used the user's edits, and reported the
+    # difference as damage.  The GUI always passes an engine, so this governs no
+    # production run today; it is fixed because the next caller will not know
+    # that.
     if engine is None:
-        if config_path is None:
-            config_path = Path(__file__).parent / "patterns.yaml"
-        engine = DetectionEngine(load_config(config_path))
+        engine = DetectionEngine(load_config(config_path or resolve_config_path()))
 
     # Evidence is read from the input only.  The output side is asked one
     # question — what text survived — and policy is never re-derived from it:

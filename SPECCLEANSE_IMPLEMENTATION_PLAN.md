@@ -1507,6 +1507,69 @@ module.
 **Exit gate:** the verifier uses the intended active config under every call mode; malformed touched
 options fail clearly; test-only changes receive test coverage without publishing anything.
 
+### 15.4 What W08 found
+
+**§15.3 was already done, by an earlier package.** `.github/workflows/tests.yml` exists, runs
+`python -B -m unittest discover -s tests -t .` on every pull request and every push to `master`, holds
+`permissions: contents: read`, publishes nothing, and carries the matrix §15.3 asks for — `windows
+(3.12)`, matching the version `release.yml` builds with, and `linux (3.10, oldest supported)`. Its
+header records the reasoning §15.3 gives, including why `release.yml`'s filter stays root-level. One
+thing it adds beyond the plan: a Windows-only step that imports `gui` before the suite runs, because a
+Windows lane without `tkinter` would skip every GUI test and still exit 0 — indistinguishable from a
+passing one. Nothing was needed here.
+
+Worth recording separately that §15.3's premise had also aged in the other direction: the plan says the
+GUI tests are "the four skipped GUI tests", and W07 left fifteen.
+
+**§15.1's remedy was right and its diagnosis was stale.** The plan describes a fallback "computed and
+never read". The code had already been restructured to resolve only when no engine is supplied, so that
+particular waste was gone. What remained was worse and is what the section's remedy actually fixes: the
+fallback did not go through the shared resolver at all. It named `Path(__file__).parent`, which in a
+frozen build is PyInstaller's extraction directory — the temporary copy a user cannot edit. Reproduced
+against a simulated bundle:
+
+```
+apppaths.resolve_config_path()   -> install/patterns.yaml
+verify_clean(engine=None) loaded -> <module dir>/patterns.yaml
+```
+
+An engine-less caller would have judged the output against shipped defaults while the cleaner used the
+user's edits, and reported the difference as damage. **Still latent**, exactly as §15.1 says: the GUI
+always supplies an engine. Fixed because the next engine-less caller will not know that.
+
+The lazy call matters as much as the right path. `resolve_config_path()` can seed a per-user
+`patterns.yaml` on first run, and a caller that supplied its own engine has asked for neither that file
+nor that side effect — so a test asserts that no config is read *at all* in that case, not merely that
+the right one is.
+
+**§15.2's three shapes each failed differently, which is why validating them is worth the code.**
+
+| written | before |
+|---|---|
+| `formatting_only_removal: 'false'` | accepted, and **truthy** |
+| `colors: [255]` | `AttributeError` per file at detection, naming no section, key or line |
+| `colors: ['#FF0000']` | accepted; matched nothing, forever |
+| `colors: ['bright red']` | accepted; matched nothing, forever |
+
+The quoted boolean is the serious one: every reader asks a plain truthiness question, so a user writing
+that the formatting-only path should be **off** switched it **on** — the only path that removes text
+with no content evidence behind it.
+
+On the `#`, §15.2 leaves the choice open and asks for one consistent documented behaviour. Normalising
+it away wins because it has exactly one possible meaning, it is how every other tool writes a hex
+colour, and the alternative on offer was not "reject" but "silently match nothing forever". Everything
+else is refused; there is no defensible guess for `bright red`. A test asserts the normalised colour
+actually credits a red run, because checking only that the config was rewritten would have left the
+original defect standing under a passing test.
+
+Style names are deliberately not validated against any document, per §15.2, and a test pins that:
+styles differ across templates, so a name one sample does not use says nothing about the config.
+
+**What this does not establish.** Nothing here was exercised against a real frozen build — the bundle
+is simulated by patching `sys.frozen` and `sys._MEIPASS`, which is what §15.1 asks for and is not the
+same as running the `.exe`. The packaging lane builds the executable but does not run the suite inside
+it.
+
 ## 16. W09: measured performance improvements
 
 ### 16.1 Establish a corrected baseline

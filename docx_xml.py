@@ -1175,6 +1175,65 @@ class StyleIndex:
 #: Config keys whose values are lists of regular expressions.
 PATTERN_KEYS = ("text_patterns", "low_confidence_patterns", "inline_patterns")
 
+#: Section keys whose value is a list of style names.
+STYLE_KEYS = ("character_styles", "paragraph_styles", "preserve_styles")
+
+#: Every section key that must hold a list, and every one that must hold a
+#: mapping.  Both exist for one reason: a key *present with a null value* is
+#: not the same as an absent one, and used to be treated as if it were.
+#:
+#: ``colors:`` with nothing after it is ``None`` in YAML.  Skipping it here left
+#: every reader to do ``.get(key, default)``, which hands back the stored
+#: ``None`` rather than the default — so the mistake surfaced per file, deep in
+#: detection, as ``'NoneType' object is not iterable`` naming no section, key or
+#: line.  Six spellings did that, each with a different exception.
+#:
+#: They are normalised to the empty value rather than refused, because an absent
+#: key already means "empty" to every reader, and someone who deleted the last
+#: entry from a list wrote something coherent.
+LIST_KEYS = PATTERN_KEYS + STYLE_KEYS
+MAPPING_KEYS = ("formatting_signals",)
+
+#: Config keys that switch behaviour on or off, wherever they appear in a
+#: section.  Checked because YAML quietly makes ``'false'`` a *string*, and
+#: every reader here asks a plain truthiness question — so a quoted "off"
+#: turns the option on.  For ``formatting_only_removal`` that is the one path
+#: that removes text on no content evidence at all, switched on by someone
+#: writing that it should be off.
+BOOLEAN_KEYS = ("enabled", "formatting_only_removal")
+
+#: What Word writes in ``w:color w:val``: six hexadecimal digits, no "#".
+_HEX_COLOR = re.compile(r"\A[0-9A-Fa-f]{6}\Z")
+
+
+def normalise_color(value, where: str) -> str:
+    """Validate one editorial colour and return it as Word writes it.
+
+    A leading ``#`` is normalised away rather than rejected.  It has exactly
+    one possible meaning, it is how every other tool writes a hex colour, and
+    the alternative is a rule that silently matches nothing — ``'#FF0000'``
+    never equals the ``FF0000`` Word puts in ``w:val``, so the user's red text
+    is simply never recognised and nothing says why.
+
+    Anything else is refused, because there is no defensible guess.  Two
+    measured failures this replaces: ``255`` raised ``AttributeError: 'int'
+    object has no attribute 'upper'`` per file, naming no section, key or
+    line; ``'bright red'`` was accepted and matched nothing, forever.
+    """
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{where}: expected a colour like 'FF0000', got "
+            f"{type(value).__name__} {value!r}"
+        )
+    candidate = value[1:] if value.startswith("#") else value
+    if not _HEX_COLOR.match(candidate):
+        raise ValueError(
+            f"{where}: {value!r} is not a colour — expected six hexadecimal "
+            "digits as Word writes them, for example 'FF0000' (a leading '#' "
+            "is accepted and removed)"
+        )
+    return candidate.upper()
+
 
 def compile_patterns(patterns: list[str], where: str) -> list[re.Pattern]:
     """Compile a list of pattern strings, naming the offender on failure."""
@@ -1223,12 +1282,51 @@ def load_config(config_path: Path) -> dict:
     for section_name, section in config.items():
         if not isinstance(section, dict):
             continue
-        for key in PATTERN_KEYS:
-            values = section.get(key)
-            if values is None:
+        for key in LIST_KEYS:
+            if key not in section:
                 continue
-            if not isinstance(values, list):
-                raise ValueError(f"{section_name}.{key} must be a list of patterns")
-            compile_patterns(values, f"{section_name}.{key}")
+            if section[key] is None:
+                section[key] = []
+                continue
+            if not isinstance(section[key], list):
+                kind = "patterns" if key in PATTERN_KEYS else "style names"
+                raise ValueError(f"{section_name}.{key} must be a list of {kind}")
+            if key in PATTERN_KEYS:
+                compile_patterns(section[key], f"{section_name}.{key}")
+
+        for key in MAPPING_KEYS:
+            if key not in section:
+                continue
+            if section[key] is None:
+                section[key] = {}
+            elif not isinstance(section[key], dict):
+                raise ValueError(
+                    f"{section_name}.{key} must be a mapping, got "
+                    f"{type(section[key]).__name__}"
+                )
+
+        for key in BOOLEAN_KEYS:
+            if key in section and not isinstance(section[key], bool):
+                raise ValueError(
+                    f"{section_name}.{key} must be true or false, got "
+                    f"{type(section[key]).__name__} {section[key]!r}. Quoting it "
+                    "makes it a string, and a non-empty string counts as true."
+                )
+
+        signals = section.get("formatting_signals")
+        if isinstance(signals, dict) and "colors" in signals:
+            colors = signals["colors"]
+            where = f"{section_name}.formatting_signals.colors"
+            if colors is None:
+                signals["colors"] = []
+            elif not isinstance(colors, list):
+                raise ValueError(f"{where} must be a list of colours")
+            else:
+                # Normalised in place, so every reader downstream compares
+                # against one shape and no caller has to remember to do this.
+                signals["colors"] = [
+                    normalise_color(color, f"{where}[{index}]")
+                    for index, color in enumerate(colors)
+                ]
 
     return config
