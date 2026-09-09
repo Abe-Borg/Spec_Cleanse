@@ -444,6 +444,62 @@ refresh, so a preserved-but-emptied field result may come back. What is promised
 the instruction and its wrapper are still there to recalculate from. Field instructions
 are never rewritten and field values are never updated programmatically.
 
+### Reference Integrity, Emptied Tables, and Numbering
+
+Three consequences a clean can have that no text comparison sees.
+
+**A reference this run broke.** A bookmark inside a removed paragraph goes with it
+while the `REF` naming it survives, leaving a live cross-reference pointing at nothing.
+`docx_xml.reference_target()` reads just enough field grammar to say which bookmark a
+field consumes — reusing the field-instruction reader, so a split instruction and a
+quoted name both resolve. Two consumers are supported: reference fields (`REF`,
+`PAGEREF`, `NOTEREF`), simple or complex, and internal hyperlinks, which name their
+target in `w:anchor` rather than through a field.
+
+The inventory is **document-wide**, the opposite of field carriers and for the opposite
+reason: a reference in a header legitimately names a bookmark in the body, while a field
+lost from a header is not answered by an identical one in the body. Names match
+case-insensitively, as Word matches them, and are reported as written.
+
+References are kept **per consumer**, not collapsed by target name. One missing bookmark
+can break references in the body, a header and a note at once, and each is a separate
+place someone has to go and repair — a report naming only the bookmark says what is wrong
+without saying where. Each surviving consumer is reported with its part and with the
+instruction or anchor that names the target.
+
+Only what this run broke is reported, and there is deliberately **no tracked-deletion
+exemption** — unlike the field inventory. Accepting a revision that deletes a referenced
+target is a requested deletion with an unrequested consequence, and the consequence is
+what needs review. Nothing is repaired: no target invented, no field retargeted, no
+replacement bookmark created. Leaving an empty bookmark behind would not count as fixing
+this — it suppresses one error message while letting the `REF` return misleading content.
+
+**A table accepted revisions emptied.** Deleting a table's last row already worked; the
+`w:tbl` stayed, holding nothing, and neither lint nor verification could see it. That is
+the standing demonstration that **a clean lint is not evidence Word will accept a
+package** — the lint had no rule for the shape, so it reported nothing, which is not the
+same as reporting that nothing is wrong. Nesting needs no special traversal: a table with
+no rows has no cells, so it can hold no inner table, and is always a leaf.
+
+**Only tables this acceptance actually emptied are removed.** A table that arrived rowless
+is the document's own problem; removing it would rewrite a file that had no revisions to
+accept, merely because the option was on. It is still linted, so it is visible without
+being silently repaired — the same rule the structural comparison follows, that only what
+this run did is this run's doing.
+
+**A removed paragraph that took part in automatic numbering.** Its own category —
+`VerificationResult.numbering` — because no text-integrity claim is being made. Nothing
+was lost; what may have changed is the numbers a reader sees. `docx_xml.numbering_id()`
+resolves direct `w:numPr` then the style chain, and treats `w:numId` `"0"` as the
+override it is rather than a list called zero. A paragraph naming no style still has one —
+Word applies the default paragraph style — so the chain starts there when `w:pStyle` is
+absent, rather than at `None` and examining nothing. A notice is raised only when the list
+still has surviving members: a list whose every paragraph went renumbers nothing, and a
+notice about it would be noise dressed as precision.
+
+Nothing is renumbered and no cross-reference is rewritten. The reference check above is
+what asserts a specific reference broke, and it names the bookmark.
+
 ### Files Walked
 
 `processor.py` and `verify.py` both walk the parts returned by `docx_xml.collect_content_parts()`, inside the `word/` directory:

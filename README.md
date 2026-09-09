@@ -309,6 +309,17 @@ plain requirement disappears must not.
   reference, not the words. Fields are therefore compared by instruction and by
   part, so an identical field elsewhere in the document cannot cover the loss.
 - **Added paragraphs** — text in the output that was not in the input.
+- **Numbering notices** — a removed paragraph that took part in automatic
+  numbering, where the list still has surviving members. This is deliberately
+  its own category rather than a reported loss: nothing went missing, but the
+  numbers a reader sees, and any reference written against them, may now read
+  differently. Nothing is renumbered and no cross-reference is rewritten.
+
+A broken cross-reference is reported among the structural violations. If a
+bookmark disappears while a `REF` field or internal hyperlink still names it,
+the run needs review — the output is still written, but a live reference now
+points at nothing. Only references this run broke are reported; one already
+dangling on the way in is the document's own problem.
 
 A run passes only when all four come back clean. The verdict is advisory: a file
 that does not pass is still produced, but it is counted as **needs review** rather
