@@ -416,11 +416,28 @@ Word splits a complex instruction across `w:instrText` nodes at arbitrary points
 plus `Target ` is the same field as ` REF Target `. It returns a Counter, not a set: a
 document may legitimately hold the same field twice and losing one of them is still a loss.
 
+**Nested fields need a stack, not a depth counter.** A field inside another field's result
+is its own carrier. Accumulating instructions into one buffer and emitting when the nesting
+closed merged the two, so an output that lost the inner field's `w:fldChar` pair — keeping
+its instruction text and cached result — produced an *identical* inventory, and the loss was
+invisible.
+
 Verification compares those instructions **per part**, not as a document-wide count. A
 field lost from a header is not answered by an identical one in the body, and a total
 would hide one field going while another arrives. `skip_deleted` leaves out fields inside
 a tracked deletion, which a run accepting revisions removes legitimately — the source
 revision is the evidence that explains their absence.
+
+`docx_xml.in_tracked_deletion()` answers "would `accept_revisions()` remove this?", and it
+reads `REVISION_DELETE_TAGS` rather than naming `w:del` itself. A second, shorter list of
+that answer drifted from the first and left `w:moveFrom` out, so a field inside an accepted
+*move* was reported lost from a run that had done exactly the right thing.
+
+**`w:moveFrom` is the one revision whose content reaches the text comparison.** A deleted
+run hides its text in `w:delText`, which no extractor reads, so it never arrives; the source
+half of a move keeps real `w:t` until the move is accepted. `verify._in_tracked_deletion()`
+therefore asks two questions — is the *container* marked deleted (a row in `w:trPr`, a cell
+in `w:tcPr`), or does every text-carrying run sit inside a revision whose content goes.
 
 **Keeping a wrapper is not a promise about its value.** Word recalculates fields on
 refresh, so a preserved-but-emptied field result may come back. What is promised is that

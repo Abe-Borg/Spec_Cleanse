@@ -221,6 +221,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the loss. Such a paragraph is now emptied in place, keeping the instruction and
   its wrapper.
 
+- A field nested inside another field's result is counted as its own carrier.
+  Instructions were accumulated into one buffer and emitted when the nesting
+  closed, which merged the two, so an output that lost the inner field's
+  `w:fldChar` pair — keeping its instruction text and cached result — produced an
+  identical inventory and the loss was invisible.
+
+- Accepting a tracked **move** is no longer reported as damage. `w:moveFrom` is
+  the one revision whose content reaches the text comparison as ordinary `w:t`,
+  because a deleted run hides its text in `w:delText` that no extractor reads. So
+  a correct revision-accepting run was reported as an unexplained removal, and any
+  field inside the move as a lost carrier. The check now reads
+  `REVISION_DELETE_TAGS` rather than naming `w:del` itself, and asks at paragraph
+  scope whether every text-carrying run sits inside a revision whose content goes.
+
 - Verification can see a field carrier disappear even when the text is unchanged.
   A stripped field leaves the same characters behind, so no text comparison
   notices; what is lost is the live reference. Fields are compared by instruction

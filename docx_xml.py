@@ -271,13 +271,21 @@ LAYOUT_BREAK_TYPES = frozenset({"page", "column"})
 
 
 def in_tracked_deletion(node: etree._Element) -> bool:
-    """True if a tracked change marks ``node`` or a container of it as deleted.
+    """True if accepting revisions would take ``node`` with it.
 
-    Covers all three markups: a run-level ``w:del`` wrapper, a deleted table row
-    recording it in ``w:trPr``, and a deleted cell in ``w:tcPr``.
+    Covers every markup that carries content away: the inline wrappers in
+    :data:`REVISION_DELETE_TAGS` — ``w:del`` and ``w:moveFrom``, the *source*
+    half of a move — a deleted table row recording it in ``w:trPr``, and a
+    deleted cell in ``w:tcPr``.
+
+    It reads that tuple rather than naming ``w:del`` itself, because the
+    question here is exactly "does :func:`accept_revisions` remove this?" and
+    a second, shorter list of the answer drifted from the first: a field inside
+    a tracked move was reported lost from a run that had correctly accepted the
+    move.
     """
     while node is not None:
-        if node.tag == f"{W}del":
+        if node.tag in REVISION_DELETE_TAGS:
             return True
         if node.tag == f"{W}tr" and node.find(f"{W}trPr/{W}del") is not None:
             return True
@@ -313,25 +321,24 @@ def field_instructions(scope: etree._Element, skip_deleted: bool = False) -> Cou
             continue
         found[" ".join((field.get(f"{W}instr") or "").split())] += 1
 
-    depth = 0
-    parts: list[str] = []
-    deleted = False
+    # A stack, not a depth counter: a field nested in another field's result is
+    # its own carrier.  Accumulating into one buffer merged the two
+    # instructions and emitted a single entry, so stripping the inner field's
+    # begin/end while leaving its instruction text behind produced an identical
+    # inventory — the loss of a live nested field was invisible.
+    open_fields: list[tuple[list[str], bool]] = []
     for node in scope.iter(f"{W}fldChar", f"{W}instrText"):
         if node.tag == f"{W}instrText":
-            if depth > 0:
-                parts.append(node.text or "")
+            if open_fields:
+                open_fields[-1][0].append(node.text or "")
             continue
         kind = node.get(f"{W}fldCharType")
         if kind == "begin":
-            depth += 1
-            if depth == 1:
-                deleted = skip_deleted and in_tracked_deletion(node)
-        elif kind == "end" and depth > 0:
-            depth -= 1
-            if depth == 0:
-                if not deleted:
-                    found[" ".join("".join(parts).split())] += 1
-                parts = []
+            open_fields.append(([], skip_deleted and in_tracked_deletion(node)))
+        elif kind == "end" and open_fields:
+            parts, deleted = open_fields.pop()
+            if not deleted:
+                found[" ".join("".join(parts).split())] += 1
     return found
 
 

@@ -39,10 +39,13 @@ from docx_xml import (
     collect_content_parts,
     field_chars_balanced,
     field_instructions,
+    in_tracked_deletion,
+    iter_own_runs,
     iter_paragraphs,
     note_identity,
     paragraph_signature,
     run_profile,
+    run_text,
     load_config,
     load_styles,
     orphaned_range_markers,
@@ -344,20 +347,24 @@ def extract_paragraphs(
 
 
 def _in_tracked_deletion(para: etree._Element) -> bool:
-    """True if a tracked change marks the row or cell holding this paragraph.
+    """True if accepting revisions would take this paragraph's text.
 
-    Run-level deletions hide their text in ``w:delText``, which no extractor
-    reads, so they never reach the comparison.  A deleted *row* is different:
-    its text stays ordinary ``w:t`` and only ``w:trPr`` records the deletion.
+    Two shapes reach the comparison, and only one of them used to be checked.
+
+    The *container* may be marked deleted — a table row records it in
+    ``w:trPr``, a cell in ``w:tcPr`` — and its text stays ordinary ``w:t``,
+    which is why it arrives here at all.
+
+    Or every run carrying text may sit inside a revision whose content goes.
+    ``w:del`` never shows up this way, because a deleted run holds ``w:delText``
+    that no extractor reads; ``w:moveFrom`` does, because the source half of a
+    move keeps real ``w:t`` until the move is accepted.  So accepting a tracked
+    move made its paragraph look like an unexplained removal.
     """
-    node = para
-    while node is not None:
-        if node.tag == f"{W}tr" and node.find(f"{W}trPr/{W}del") is not None:
-            return True
-        if node.tag == TC_TAG and node.find(f"{W}tcPr/{W}cellDel") is not None:
-            return True
-        node = node.getparent()
-    return False
+    if in_tracked_deletion(para):
+        return True
+    runs = [run for run in iter_own_runs(para) if run_text(run).strip()]
+    return bool(runs) and all(in_tracked_deletion(run) for run in runs)
 
 
 # =============================================================================

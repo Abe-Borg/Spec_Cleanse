@@ -72,6 +72,119 @@ class FieldIdentity(DocxTestCase):
         self.assertEqual(dict(field_instructions(twice)), {"REF Target": 2})
 
 
+def _field(instruction):
+    """The opening half of a complex field: begin plus its instruction."""
+    return ('<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            f'<w:r><w:instrText xml:space="preserve">{instruction}</w:instrText></w:r>')
+
+
+_SEPARATE = '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+_END = '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+
+#: A field nested inside another field's result — an IF whose condition is a
+#: PAGE field.  Two carriers, not one.
+NESTED = ('<w:p>' + _field(" IF ") + _field(" PAGE ") + _SEPARATE
+          + '<w:r><w:t>7</w:t></w:r>' + _END + _SEPARATE
+          + '<w:r><w:t>x</w:t></w:r>' + _END + '</w:p>')
+
+#: The same paragraph with the *inner* field's begin and end stripped: its
+#: instruction text and cached result survive, so the characters are unchanged.
+NESTED_DAMAGED = ('<w:p>' + _field(" IF ")
+                  + '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+                  + _SEPARATE + '<w:r><w:t>7</w:t></w:r>'
+                  + _SEPARATE + '<w:r><w:t>x</w:t></w:r>' + _END + '</w:p>')
+
+
+class NestedFields(DocxTestCase):
+    """A field inside another field's result is its own carrier.
+
+    Accumulating instructions into one buffer and emitting when the nesting
+    closed merged the two, so an output that lost the inner field's begin and
+    end — keeping its instruction text and cached result — produced an
+    identical inventory, and the loss was invisible.
+    """
+
+    def test_nested_fields_are_counted_separately(self):
+        found = field_instructions(self.root(self.build(db.document(NESTED), name="n.docx")))
+
+        self.assertEqual(dict(found), {"IF": 1, "PAGE": 1})
+
+    def test_losing_the_inner_field_changes_the_inventory(self):
+        intact = field_instructions(self.root(self.build(db.document(NESTED), name="ni.docx")))
+        damaged = field_instructions(
+            self.root(self.build(db.document(NESTED_DAMAGED), name="nd.docx")))
+
+        self.assertNotEqual(dict(intact), dict(damaged),
+                            "the loss of a nested carrier must be visible")
+
+    def test_a_stripped_nested_field_is_reported(self):
+        source = self.build(db.document(NESTED, db.text_para("Anchor.")), name="nx_in.docx")
+        damaged = self.build(db.document(NESTED_DAMAGED, db.text_para("Anchor.")),
+                             name="nx_out.docx")
+
+        result = verify_clean(source, damaged, engine=self.make_engine())
+
+        self.assertTrue(any("field lost" in str(v) for v in result.structural),
+                        f"not reported: {[str(v) for v in result.structural]}")
+        self.assertFalse(result.passed)
+
+    def test_an_unchanged_nested_field_document_stays_silent(self):
+        """The false-alarm guard for the same code path."""
+        doc = db.document(NESTED, db.text_para("Anchor."))
+        source = self.build(doc, name="ns_in.docx")
+        same = self.build(doc, name="ns_out.docx")
+
+        self.assertEqual(verify_clean(source, same, engine=self.make_engine()).structural, [])
+
+
+class AcceptedMoves(DocxTestCase):
+    """The source half of a tracked move goes when revisions are accepted.
+
+    ``w:moveFrom`` is the one revision whose content reaches the comparison as
+    ordinary ``w:t`` — a deleted run hides its text in ``w:delText``, which no
+    extractor reads.  So accepting a move was reported as an unexplained
+    removal, and any field inside it as a lost carrier.
+    """
+
+    MOVED = ('<w:p><w:moveFrom w:id="1" w:author="Editor">'
+             '<w:r><w:t>Moved requirement text.</w:t></w:r></w:moveFrom></w:p>')
+    MOVED_FIELD = ('<w:p><w:moveFrom w:id="1" w:author="Editor">'
+                   '<w:fldSimple w:instr=" REF Moved "><w:r><w:t>x</w:t></w:r>'
+                   '</w:fldSimple></w:moveFrom></w:p>')
+
+    def _accept(self, xml, name):
+        from processor import DocxProcessor
+        engine = self.make_engine()
+        source = self.build(db.document(db.text_para("Body."), xml), name=f"{name}.docx")
+        cleaned = self.temp_dir / f"{name}_out.docx"
+        self.assertEqual(
+            DocxProcessor(engine, strip_revisions=True).process(source, cleaned).errors, [])
+        return source, verify_clean(source, cleaned, engine=engine, strip_revisions=True)
+
+    def test_accepting_a_move_is_not_an_unexplained_removal(self):
+        _, result = self._accept(self.MOVED, "move_plain")
+
+        self.assertTrue(result.passed, result.removed)
+        self.assertEqual([r.category for r in result.removed], ["tracked_deletion"])
+
+    def test_a_field_inside_an_accepted_move_is_not_a_lost_carrier(self):
+        _, result = self._accept(self.MOVED_FIELD, "move_field")
+
+        self.assertEqual(result.structural, [])
+        self.assertTrue(result.passed, result.removed)
+
+    def test_the_same_loss_is_damage_when_revisions_are_kept(self):
+        """Without the option that authorizes it, the authority does not exist."""
+        source = self.build(db.document(db.text_para("Body."), self.MOVED),
+                            name="movekeep_in.docx")
+        damaged = self.build(db.document(db.text_para("Body.")), name="movekeep_out.docx")
+
+        result = verify_clean(source, damaged, engine=self.make_engine())
+
+        self.assertFalse(result.passed)
+        self.assertEqual(len(result.unexpected_removals), 1, result.removed)
+
+
 class CarrierSurvivesCleaning(DocxTestCase):
     """An editorial paragraph is emptied in place when it carries a field."""
 

@@ -1161,6 +1161,28 @@ No field instruction is rewritten and no field value is updated programmatically
 caveat that section asks for is documented in `CLAUDE.md` and the changelog: keeping a wrapper is not
 a promise about its value, because Word recalculates on refresh.
 
+**Review round.** Two further defects, both reproduced before fixing, and both in the inventory this
+package introduced:
+
+- *Nested fields collapsed into one entry.* A field inside another field's result is its own carrier.
+  Accumulating instructions into one buffer and emitting when the nesting closed merged them, so an
+  output that lost the inner field's `w:fldChar` pair — keeping its instruction text and cached
+  result — produced an **identical** inventory. A stack fixes it.
+- *`w:moveFrom` was left out of the accepted-revision exemption.* `accept_revisions()` removes both
+  `w:del` and `w:moveFrom`, but the ancestry check named only `w:del`, so a field inside an accepted
+  move was reported lost from a correct run.
+
+The second exposed a **pre-existing** false alarm one level up, unrelated to fields: `w:moveFrom` is
+the only revision whose content reaches the *text* comparison, because a deleted run hides its text in
+`w:delText` that no extractor reads while the source half of a move keeps real `w:t`. So accepting a
+move reported its paragraph as an unexplained removal whatever it contained. Fixed here rather than
+deferred, because the finding's stated symptom — a correct revision-accepting run requiring review —
+persists until both halves are closed.
+
+Both fixes are the same lesson as the first half of this package: **a second, shorter list of an
+answer drifts from the first.** `in_tracked_deletion()` now reads `REVISION_DELETE_TAGS` rather than
+naming a subset of it.
+
 ## 13. W06: reference integrity, revision-empty tables, and numbering notices
 
 ### 13.1 Referenced bookmark targets — detect and report first
