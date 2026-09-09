@@ -124,6 +124,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   More editorial text survives as a result. That is the intended trade: a
   retained note costs noise in whatever reads the cleaned file, a deleted
   requirement is not recoverable from it.
+- **Documentation corrections.** Three statements contradicted the code and are
+  fixed rather than softened: that element removal preserves tail text (it does
+  not, and preserving it would protect nothing — an element tail in
+  WordprocessingML is only inter-element whitespace); that `patterns.yaml` must
+  sit beside `gui.py` (an installed build finds it beside the `.exe` or under
+  `%APPDATA%`); and that the clean "keeps document structure intact", which is a
+  guarantee no content remover can make. `verify.py`'s module description
+  likewise still described the pre-source-evidence contract.
+
+- **The test fixtures were not valid packages.** Every generated part marked the
+  `w14` namespace ignorable without declaring it, which Markup Compatibility does
+  not allow. Nothing in the suite noticed, and it would have mattered most when
+  opening a fixture in Word as a control: a rejection would have said nothing
+  about the change under test.
+
 - **Large documents verify in a fraction of the time.** Verification of a
   2,000-paragraph document full of repeated headings went from 21 seconds to
   0.2; a 12,000-paragraph one is now under 1.5 seconds where the old code would
@@ -427,9 +442,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance figures quoted above are from one machine and one interpreter,
   on synthetic fixtures. They are review targets, not thresholds asserted in
   CI, and no real specification corpus has been measured.
-- Suite baseline at the time of writing: 437 passed, 15 skipped, 0 expected
+- Suite baseline at the time of writing: 446 passed, 15 skipped, 0 expected
   failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the fifteen GUI
-  skips run, so the counts there are 437 passed and 0 skipped. Every case that
+  skips run, so the counts there are 446 passed and 0 skipped. Every case that
   was carried under `unittest.expectedFailure` has since been closed by the
   package its docstring named. An expected failure is not a failure and an
   unexpected success is; they are tracked separately for that reason.

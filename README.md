@@ -4,7 +4,12 @@ SpecCleanse is a Python desktop app that removes editorial noise from `.docx` sp
 
 ## What it does
 
-SpecCleanse performs a **single-pass content clean** and keeps document structure intact.
+SpecCleanse performs a **single-pass content clean**. It removes content and does
+not restructure the document: where deleting a paragraph would break the file — a
+section break, a container Word requires to hold something, a field that begins
+inside it — the paragraph is emptied in place instead. That is a set of rules, not
+a guarantee, which is why every run is verified and why the structural checks say
+what they found rather than that the file is sound.
 
 It removes five categories:
 
@@ -418,10 +423,26 @@ so it needs nothing beyond the runtime dependencies:
 python -m unittest discover -s tests -t .
 ```
 
+No fixture files are checked in. The suite assembles `.docx` packages
+programmatically with `zipfile`, so structural cases — a sole paragraph in a
+footer, a cell that must still end with a paragraph, a `w:sectPr` paragraph, an
+unbalanced field — are covered without binary fixtures anyone has to maintain.
+Those packages are written to temporary directories and cleaned up afterwards:
+the tests touch the filesystem, they simply do not touch the repository.
+
 The GUI tests skip themselves where `tkinter` is unavailable, which is true of a
-minimal Linux install though not of the CI runners. The rules that decide whether a
-batch is safe to write live in `batch.py` rather than `gui.py` for that reason, so
-they are exercised wherever the suite runs at all.
+minimal Linux install though not of the CI runners. **Read the skip count rather
+than inferring it from the platform** — a suite reporting `OK` with skips is not
+the same as one reporting `OK` without them, and four GUI tests were once broken
+behind exactly that difference. The rules that decide whether a batch is safe to
+write live in `batch.py` rather than `gui.py` for that reason, so they are
+exercised wherever the suite runs at all.
+
+Both CI lanes run the whole suite on every pull request and every push to
+`master`: `windows (3.12)`, matching the interpreter the released executable is
+built with, and `linux (3.10, oldest supported)`. The Windows lane additionally
+imports `gui` before the suite starts, because a Windows runner without `tkinter`
+would skip every GUI test and still exit 0 — indistinguishable from a passing run.
 
 Two suites carry the verification contract, and they ask opposite questions.
 `tests/test_evidence.py` cleans each case for real and checks that what the source
