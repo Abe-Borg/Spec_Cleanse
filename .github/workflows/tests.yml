@@ -1,0 +1,77 @@
+name: Tests
+
+# Runs the test suite on every pull request and on every push to master.
+#
+# This exists because the release workflow was the only one, and its
+# pull-request filter lists "*.py" — which in a GitHub path filter matches
+# root-level files only, since "*" does not cross a "/". A pull request
+# touching just tests/ or tools/ therefore triggered nothing at all, and could
+# merge with its tests never having run anywhere but a contributor's machine.
+#
+# The division of labour: this workflow proves the code works, the release
+# workflow proves it packages. Neither needs to do the other's job, which is
+# why release.yml's filter stays root-level — nothing under tests/ or tools/
+# goes into the executable, so a test-only change cannot break the build.
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+# Read-only. This workflow publishes nothing and needs nothing else.
+permissions:
+  contents: read
+
+# A second push to a branch makes the first run's answer irrelevant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      # One lane's failure should not hide the other's result.
+      fail-fast: false
+      matrix:
+        include:
+          # Windows is where the product ships, and the only place the GUI
+          # tests actually run: they skip wherever tkinter is absent, which is
+          # every Linux runner. The version matches the one release.yml builds
+          # with, so a green suite here means the shipped executable's
+          # interpreter ran it.
+          - name: windows (3.12)
+            os: windows-latest
+            python: "3.12"
+          # The floor CLAUDE.md claims support for. Catches syntax and stdlib
+          # use newer than the project says it requires.
+          - name: linux (3.10, oldest supported)
+            os: ubuntu-latest
+            python: "3.10"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      # The GUI tests skip themselves when gui.py will not import, and a skip
+      # exits 0 — so a Windows lane without tkinter would look exactly like a
+      # passing one while testing none of the GUI. Checked before the suite
+      # runs, so the failure names the real reason rather than showing up as an
+      # unexplained drop in the test count.
+      - name: The Windows lane must be able to run the GUI tests
+        if: matrix.os == 'windows-latest'
+        run: python -c "import gui; print('tkinter available; GUI tests will run')"
+
+      # -B keeps __pycache__ out of the checkout. The suite writes its own
+      # temporary .docx fixtures and cleans them up itself.
+      - name: Run tests
+        run: python -B -m unittest discover -s tests -t .

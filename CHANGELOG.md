@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `.github/workflows/tests.yml` runs the suite on every pull request and every
+  push to `master`, in two lanes: Windows on Python 3.12, the version the
+  executable is built with and the only place the GUI tests actually run, and
+  Linux on 3.10, the oldest version supported. The Windows lane asserts that
+  `gui.py` imports before running anything, since a skipped test exits zero and
+  a lane missing tkinter would otherwise be indistinguishable from a passing
+  one. Previously the release workflow was the only one, and its `*.py`
+  pull-request filter matches root-level files only — so a change touching just
+  `tests/` or `tools/` triggered no workflow at all and could merge without its
+  tests having run anywhere. The release workflow's filter stays root-level, now
+  with a comment saying why: nothing under `tests/` or `tools/` goes into the
+  executable.
 - `tools/`, developer measurement utilities. Nothing in the application imports
   them, they only read documents, and every clean they run is a dry run. All of
   them rest on `tools/actions.py`, which reports what a build would *do* — one

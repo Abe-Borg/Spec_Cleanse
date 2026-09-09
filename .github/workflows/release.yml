@@ -26,6 +26,13 @@ on:
   # broken build is caught before merge rather than at release time. Nothing is
   # uploaded to a release on this path — the assets are attached to the workflow
   # run, where they can be downloaded and tried.
+  #
+  # The filter below is root-level on purpose. "*.py" does not cross a "/", so it
+  # matches the modules that go into the executable and not tests/ or tools/,
+  # which do not. Those are covered by tests.yml, which runs on every pull
+  # request; building an installer because a test changed would be waste. What
+  # used to be wrong was not this filter but that no other workflow existed, so a
+  # test-only pull request triggered nothing at all.
   pull_request:
     paths:
       - ".github/workflows/release.yml"
