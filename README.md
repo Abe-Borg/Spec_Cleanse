@@ -276,11 +276,16 @@ accounts for, without writing anything.
 
 `patterns.yaml` beside the executable or under `%APPDATA%\SpecCleanse` is never
 overwritten by an update, so a copy made earlier keeps whatever rules it had. On
-startup the log names the file in use and flags two things about it: any shipped
-rule still present that was later narrowed because it deleted real requirement
-text, and formatting-only removal being switched on. Neither stops a run. Your
-edits are never touched — compare your file with the shipped one and take what you
-want.
+startup the log names the file in use, and every run flags two things about it:
+any shipped rule still present that was later narrowed because it deleted real
+requirement text, and formatting-only removal being switched on. Neither stops a
+run. Your edits are never touched — compare your file with the shipped one and
+take what you want.
+
+One thing an older file can now do is stop a run: a quoted `'true'` or `'false'`,
+or a colour that is not six hexadecimal digits, was once misread silently and is
+now refused, with a message naming the section and key. Correct the value as
+described above and the file loads.
 
 ### Style-based detection
 
@@ -304,22 +309,42 @@ placeholders that need redacting live.
 
 ## What has and has not been validated
 
-`IMPLEMENTATION_REPORT.md` records this in full. The short version, because it
-bears on how much weight the verification verdict deserves:
+This bears on how much weight the verification verdict deserves:
 
 - **No real specification corpus has ever been measured.** Every fixture behind
   every test and benchmark is generated. The census tools exist and are tested;
   none has been pointed at a folder of real documents.
-- **No cleaned file has been opened in Word as part of this work.** CI builds the
+- **No cleaned file has been put through the Word checks below.** CI builds the
   Windows executable and runs the test suite on Windows, but nothing opens a
-  document. Until that happens the project makes no claim of Word compatibility —
-  and the case that most needs it is a table whose last row a revision deleted,
-  which passed every structural check here until the lint was given a rule for it.
+  document. Until those checks are done the project makes no claim of Word
+  compatibility — and the case that most needs them is a table whose last row a
+  revision deleted, which passed every structural check here until the lint was
+  given a rule for it.
 - **Verification is a consistency check.** It shares its patterns with the
   cleaner, so a rule that removes the wrong thing is reported as expected.
 
 None of this makes the tool unusable; it makes the verdict advisory, which is
 what it says it is. Read the log rather than the exit status.
+
+### Checking a cleaned file in Word
+
+Nothing automated opens a document in Word, so this is a manual list. Open the
+original beside its cleaned copy as a control, so that a problem the original
+already has is not blamed on the clean, and never save over the original.
+
+1. The cleaned copy opens with no repair or unreadable-content prompt that the
+   original does not also produce.
+2. Requirement text, headings and section boundaries are all present.
+3. Headers, footers, note anchors, pictures and fields behave as they do in the
+   original.
+4. Simple fields survive. Refresh the references in a disposable copy and
+   inspect them.
+5. Any cross-reference the clean broke is one the log reported.
+6. A table whose last row or last cell a tracked revision deleted, cleaned with
+   **Strip comments and accept tracked changes** on, opens without complaint.
+   This is the case above that most needs Word rather than a lint.
+7. Numbering changes are absent, or the log reported them.
+8. Saving a disposable cleaned copy and reopening it introduces nothing new.
 
 ## Verification
 

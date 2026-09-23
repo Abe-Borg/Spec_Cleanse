@@ -688,6 +688,31 @@ Only two external dependencies — keep it minimal:
 - Entry point: `python gui.py`
 - Imports are relative within the project (e.g., `from detection import DetectionEngine`)
 
+### Citations of the Implementation Plan
+
+Docstrings, comments, tests and this file cite `§` sections, such as `§16.1` or
+`§10.6 criterion 3`, and the work packages `W00`–`W10`. Both come from
+`SPECCLEANSE_IMPLEMENTATION_PLAN.md`, which was deleted once every package had
+merged. It is still in history:
+
+```bash
+git show 733d078~1:SPECCLEANSE_IMPLEMENTATION_PLAN.md
+```
+
+`733d078` is the commit that deleted it. Should history ever be rewritten, this
+finds that commit again:
+
+```bash
+git log --diff-filter=D -- SPECCLEANSE_IMPLEMENTATION_PLAN.md
+```
+
+Each work package is also the title of its pull request, #24–#35.
+
+The plan records why the code is shaped as it is. It is not a specification the
+code still has to meet: where a cited section disagrees with the code or with this
+file, the code and this file are current. In anything new, describe the behaviour
+rather than citing a section.
+
 ## How to Run
 
 ### Prerequisites
@@ -781,7 +806,7 @@ Run the GUI against sample files. The log output shows:
 
 1. Run `python -m unittest discover -s tests -t .`
 2. Run the GUI against representative DOCX files (with and without footnotes/headers)
-3. Open the output in Word — there must be no "unreadable content" prompt
+3. Open the output in Word — there must be no "unreadable content" prompt. The full manual list is the README's *Checking a cleaned file in Word*
 4. Check the verification output for unexpected removals, unexpected modifications, preserve violations, and structural violations
 
 ## Releases
@@ -883,3 +908,4 @@ Add the pattern to `editorial_artifacts.inline_patterns`. No code change is need
 - **Tracked deletions are not all marked up the same way.** A deleted run holds `w:delText`, which no extractor reads; a deleted table *row* keeps ordinary `w:t` and records the deletion only in `w:trPr` (cells use `w:cellDel`). Accepting revisions therefore has to remove the row or cell whole, not just the marker
 - **Repacking** writes to a temp file and `os.replace`s it into place, so an interrupted run cannot leave a truncated `.docx`
 - **Tracked changes and comments** are only touched when `DocxProcessor(strip_revisions=True)`, which the GUI exposes as a checkbox, default off
+- **Not specially reasoned about:** `w:altChunk` imports, embedded objects beyond the tags in `EMBEDDED_CONTENT_TAGS`, and content controls holding block content get nothing beyond the paragraph-protection rules
