@@ -276,11 +276,16 @@ accounts for, without writing anything.
 
 `patterns.yaml` beside the executable or under `%APPDATA%\SpecCleanse` is never
 overwritten by an update, so a copy made earlier keeps whatever rules it had. On
-startup the log names the file in use and flags two things about it: any shipped
-rule still present that was later narrowed because it deleted real requirement
-text, and formatting-only removal being switched on. Neither stops a run. Your
-edits are never touched — compare your file with the shipped one and take what you
-want.
+startup the log names the file in use, and every run flags two things about it:
+any shipped rule still present that was later narrowed because it deleted real
+requirement text, and formatting-only removal being switched on. Neither stops a
+run. Your edits are never touched — compare your file with the shipped one and
+take what you want.
+
+One thing an older file can now do is stop a run: a quoted `'true'` or `'false'`,
+or a colour that is not six hexadecimal digits, was once misread silently and is
+now refused, with a message naming the section and key. Correct the value as
+described above and the file loads.
 
 ### Style-based detection
 
@@ -304,22 +309,42 @@ placeholders that need redacting live.
 
 ## What has and has not been validated
 
-`IMPLEMENTATION_REPORT.md` records this in full. The short version, because it
-bears on how much weight the verification verdict deserves:
+This bears on how much weight the verification verdict deserves:
 
 - **No real specification corpus has ever been measured.** Every fixture behind
   every test and benchmark is generated. The census tools exist and are tested;
   none has been pointed at a folder of real documents.
-- **No cleaned file has been opened in Word as part of this work.** CI builds the
+- **No cleaned file has been put through the Word checks below.** CI builds the
   Windows executable and runs the test suite on Windows, but nothing opens a
-  document. Until that happens the project makes no claim of Word compatibility —
-  and the case that most needs it is a table whose last row a revision deleted,
-  which passed every structural check here until the lint was given a rule for it.
+  document. Until those checks are done the project makes no claim of Word
+  compatibility — and the case that most needs them is a table whose last row a
+  revision deleted, which passed every structural check here until the lint was
+  given a rule for it.
 - **Verification is a consistency check.** It shares its patterns with the
   cleaner, so a rule that removes the wrong thing is reported as expected.
 
 None of this makes the tool unusable; it makes the verdict advisory, which is
 what it says it is. Read the log rather than the exit status.
+
+### Checking a cleaned file in Word
+
+Nothing automated opens a document in Word, so this is a manual list. Open the
+original beside its cleaned copy as a control, so that a problem the original
+already has is not blamed on the clean, and never save over the original.
+
+1. The cleaned copy opens with no repair or unreadable-content prompt that the
+   original does not also produce.
+2. Requirement text, headings and section boundaries are all present.
+3. Headers, footers, note anchors, pictures and fields behave as they do in the
+   original.
+4. Simple fields survive. Refresh the references in a disposable copy and
+   inspect them.
+5. Any cross-reference the clean broke is one the log reported.
+6. A table whose last row or last cell a tracked revision deleted, cleaned with
+   **Strip comments and accept tracked changes** on, opens without complaint.
+   This is the case above that most needs Word rather than a lint.
+7. Numbering changes are absent, or the log reported them.
+8. Saving a disposable cleaned copy and reopening it introduces nothing new.
 
 ## Verification
 
@@ -457,8 +482,8 @@ behind exactly that difference. The rules that decide whether a batch is safe to
 write live in `batch.py` rather than `gui.py` for that reason, so they are
 exercised wherever the suite runs at all.
 
-Both CI lanes run the whole suite on every pull request and every push to
-`master`: `windows (3.12)`, matching the interpreter the released executable is
+CI runs the whole suite on every pull request and every push to `master`, in two
+lanes: `windows (3.12)`, matching the interpreter the released executable is
 built with, and `linux (3.10, oldest supported)`. The Windows lane additionally
 imports `gui` before the suite starts, because a Windows runner without `tkinter`
 would skip every GUI test and still exit 0 — indistinguishable from a passing run.
@@ -473,19 +498,11 @@ produced its input proves nothing. One of those cases asserts that a *correct* c
 still passes, which is what stops the whole contract being satisfied by a verifier
 that simply distrusts everything.
 
-Continuous integration runs the suite on every pull request and every push to
-`master`, in two lanes: Windows on the Python version the executable is built with,
-and Linux on 3.10, the oldest version this project claims to support. The Windows
-lane checks that `gui.py` imports before running anything, because a skip exits zero
-and a lane that skipped the GUI tests would otherwise look exactly like one that
-passed them.
-
-Some tests are carried as `unittest.expectedFailure` — cases that describe
-behaviour a later change will fix. The suite stays green while they fail, and turns
-red if one ever starts passing, which is what prompts removing the decorator along
-with the defect. Today they cover an inline placeholder excusing the deletion of a
-requirement word beside it, and five requirement sentences the shipped patterns
-currently remove.
+A test describing behaviour a later change will fix is carried as
+`unittest.expectedFailure`. The suite stays green while it fails, and turns red if
+it ever starts passing, which is what prompts removing the decorator along with the
+defect. None is carried today: the last ones were closed by the fixes they
+anticipated.
 
 ## Developer tools
 
@@ -541,7 +558,8 @@ Spec_Cleanse/
 ├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
 ├── tools/              # Developer measurement utilities (not imported by the app)
-│   └── benchmark_pipeline.py  # Pipeline timings on synthetic fixtures
+│   ├── actions.py             # What a build would do, one row per action
+│   ├── benchmark_pipeline.py  # Pipeline timings on synthetic fixtures
 │   ├── census_formatting.py   # Cost of turning formatting-only removal off
 │   ├── census_references.py   # Removals inside referenced bookmark ranges
 │   └── corpus_compare.py      # Record decisions, diff two builds
@@ -551,14 +569,11 @@ Spec_Cleanse/
 │   ├── docx_builder.py # Synthetic .docx fixtures
 │   ├── support.py      # Shared test-case base
 │   └── test_*.py
-├── legacy/
-│   ├── style_cleaner.py
-│   ├── deep_cleaner.py
-│   └── README.md
 ├── packaging/
 │   ├── speccleanse.spec  # PyInstaller build
 │   └── installer.iss     # Inno Setup installer
 ├── .github/workflows/
+│   ├── tests.yml       # Runs the suite on every pull request and push to master
 │   └── release.yml     # Builds and attaches release assets on a tag
 ├── README.md
 ├── CHANGELOG.md

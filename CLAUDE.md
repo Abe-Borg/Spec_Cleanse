@@ -14,7 +14,7 @@ Every clean run performs:
 1. **Shallow content removal** — pattern + formatting detection inside `document.xml`, headers, footers, footnotes, and endnotes
 2. **Verification** — input/output comparison classifies every removed paragraph as expected, unexpected, or a preserve violation
 
-There is no longer a "deep clean" or "style clean" stage in the active pipeline. Earlier versions had ZIP/XML structural optimization and unused-style removal stages; both were retired because they changed document metadata without meaningfully improving downstream LLM extraction. Their source still lives in `legacy/` for reference but is not imported by the running app.
+There is no longer a "deep clean" or "style clean" stage in the active pipeline. Earlier versions had ZIP/XML structural optimization and unused-style removal stages; both were retired because they changed document metadata without meaningfully improving downstream LLM extraction. Their source was archived in `legacy/` and has since been deleted; `git checkout v1.1.0 -- legacy/` restores it.
 
 ### Module Responsibilities
 
@@ -29,8 +29,6 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
 | `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `benchmark_pipeline` (timings on synthetic fixtures, all eight §16.1 families; **not** the corpus harness), `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
-| `legacy/deep_cleaner.py` | Archived; not used |
-| `legacy/style_cleaner.py` | Archived; not used |
 
 `docx_xml.py` holds document-model plumbing only — it knows how WordprocessingML
 nests runs inside paragraphs and which containers Word refuses to open when empty,
@@ -688,6 +686,31 @@ Only two external dependencies — keep it minimal:
 - Entry point: `python gui.py`
 - Imports are relative within the project (e.g., `from detection import DetectionEngine`)
 
+### Citations of the Implementation Plan
+
+Docstrings, comments, tests and this file cite `§` sections, such as `§16.1` or
+`§10.6 criterion 3`, and the work packages `W00`–`W10`. Both come from
+`SPECCLEANSE_IMPLEMENTATION_PLAN.md`, which was deleted once every package had
+merged. It is still in history:
+
+```bash
+git show 733d078~1:SPECCLEANSE_IMPLEMENTATION_PLAN.md
+```
+
+`733d078` is the commit that deleted it. Should history ever be rewritten, this
+finds that commit again:
+
+```bash
+git log --diff-filter=D -- SPECCLEANSE_IMPLEMENTATION_PLAN.md
+```
+
+Each work package is also the title of its pull request, #24–#35.
+
+The plan records why the code is shaped as it is. It is not a specification the
+code still has to meet: where a cited section disagrees with the code or with this
+file, the code and this file are current. In anything new, describe the behaviour
+rather than citing a section.
+
 ## How to Run
 
 ### Prerequisites
@@ -754,7 +777,7 @@ Two conventions matter here:
   `tests/test_verify.py` how it was carried until W03 replaced the containment
   predicate with interval coverage. Both reported the unexpected success that said the
   decorator could go. No case currently carries one — when you add one, its docstring
-  names the package that closes it.
+  names the change that closes it.
 - **A measurement tool is held to the same standard as the code it measures.**
   Everything under `tools/` is tested, because a wrong number is what a decision
   gets taken on. Two traps, both of which produced real bugs here:
@@ -781,7 +804,7 @@ Run the GUI against sample files. The log output shows:
 
 1. Run `python -m unittest discover -s tests -t .`
 2. Run the GUI against representative DOCX files (with and without footnotes/headers)
-3. Open the output in Word — there must be no "unreadable content" prompt
+3. Open the output in Word — there must be no "unreadable content" prompt. The full manual list is the README's *Checking a cleaned file in Word*
 4. Check the verification output for unexpected removals, unexpected modifications, preserve violations, and structural violations
 
 ## Releases
@@ -883,3 +906,4 @@ Add the pattern to `editorial_artifacts.inline_patterns`. No code change is need
 - **Tracked deletions are not all marked up the same way.** A deleted run holds `w:delText`, which no extractor reads; a deleted table *row* keeps ordinary `w:t` and records the deletion only in `w:trPr` (cells use `w:cellDel`). Accepting revisions therefore has to remove the row or cell whole, not just the marker
 - **Repacking** writes to a temp file and `os.replace`s it into place, so an interrupted run cannot leave a truncated `.docx`
 - **Tracked changes and comments** are only touched when `DocxProcessor(strip_revisions=True)`, which the GUI exposes as a checkbox, default off
+- **Not specially reasoned about:** `w:altChunk` imports, embedded objects beyond the tags in `EMBEDDED_CONTENT_TAGS`, and content controls holding block content get nothing beyond the paragraph-protection rules

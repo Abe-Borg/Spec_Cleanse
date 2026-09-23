@@ -98,7 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `formatting_based`. That label is now reserved for what it says: a removal that
   crossed the threshold on formatting alone.
 
-
 - Rules that were deleting real requirement text have been narrowed. The
   copyright section now fires only on unambiguous markers — ©, "copyright",
   "all rights reserved", the ARCOM distribution line, and an anchored "licensed
@@ -258,13 +257,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   *correct* clean still passes — without it the contract could be satisfied by a
   verifier that distrusts everything.
 
-
-- `detection.config_notices()`, reported in the GUI log at startup. `patterns.yaml`
-  beside the executable or under `%APPDATA%` is never overwritten by an update, so
-  a copy made before a rule was narrowed keeps the broad version and nothing
-  otherwise says so. Flags any superseded shipped rule still active, naming the
-  requirement it used to delete, and flags formatting-only removal being on.
-  Matched on the exact prior string, so an edited rule is left alone.
+- `detection.config_notices()`, reported in the GUI log at the start of every
+  run. `patterns.yaml` beside the executable or under `%APPDATA%` is never
+  overwritten by an update, so a copy made before a rule was narrowed keeps the
+  broad version and nothing otherwise says so. Flags any superseded shipped
+  rule still active, naming the requirement it used to delete, and flags
+  formatting-only removal being on. Matched on the exact prior string, so an
+  edited rule is left alone.
 
 - `.github/workflows/tests.yml` runs the suite on every pull request and every
   push to `master`, in two lanes: Windows on Python 3.12, the version the
@@ -288,8 +287,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whether the numbers are worth anything.
   - `census_formatting` measures what turning `formatting_only_removal` off
     would cost, by cleaning each document twice and reporting the paragraphs
-    that would newly survive. The proposal to flip that default has so far
-    rested on an argument rather than a measurement.
+    that would newly survive. The default was switched off on argument rather
+    than measurement (see *Changed*), and this is how to check it.
   - `census_references` measures how much of a clean sits inside a bookmark
     range that some supported `REF`/`PAGEREF`/`NOTEREF` field or internal
     hyperlink actually names — the question that decides how far reference
@@ -298,10 +297,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     recordings, so a change to the patterns can be reviewed as "what did this
     decide differently" rather than "do the tests still pass".
 - `tests/test_shipped_policy.py` pins what the shipped patterns do to
-  representative specification prose. Five requirement sentences the current
-  rules wrongly remove are carried as expected failures until the rules are
-  narrowed; five unambiguous editorial positives are pinned so that narrowing
-  cannot go too far.
+  representative specification prose. Five requirement sentences the 1.1.0
+  rules wrongly removed are pinned as surviving a clean, and five unambiguous
+  editorial positives are pinned so that the narrowing cannot go too far.
 - `batch.py`, holding destination planning, the collision rules and `FileOutcome`.
   It is free of Tk on purpose: `gui.py` imports `tkinter` at module level, so
   anything defined there cannot be tested where Tk is absent — every Linux run.
@@ -309,6 +307,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run, such as a page break kept inside otherwise removed text. Separate from
   `errors`, which decide `success`.
 - `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
+
+### Removed
+
+- `legacy/`, the source of the deep-clean and style-clean stages retired before
+  1.0.0. Nothing imported it, no test exercised it, and it never shipped in the
+  executable. `git checkout v1.1.0 -- legacy/` restores it.
 
 ### Fixed
 
@@ -356,7 +360,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   document's own problem, and removing it would rewrite a file that had no
   revisions to accept. A zero-row table and a zero-cell row are now both linted, so the shape is observable
   rather than silently absent from the rules.
-
 
 - **A simple field no longer protects nothing.** Word writes a field two ways: as
   one `w:fldSimple` carrying its instruction in an attribute, or as a run sequence
@@ -442,10 +445,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance figures quoted above are from one machine and one interpreter,
   on synthetic fixtures. They are review targets, not thresholds asserted in
   CI, and no real specification corpus has been measured.
-- Suite baseline at the time of writing: 446 passed, 15 skipped, 0 expected
-  failures on Linux with Python 3.11 and lxml 6.0.2; on Windows the fifteen GUI
-  skips run, so the counts there are 446 passed and 0 skipped. Every case that
-  was carried under `unittest.expectedFailure` has since been closed by the
+- Suite at the time of writing: 449 tests. Where `tkinter` is absent the 15 GUI
+  tests skip, leaving 434 passed on Linux with Python 3.11 and lxml 6.0.2; both
+  CI lanes have `tkinter` and pass all 449. None is carried under
+  `unittest.expectedFailure`: every case that was has since been closed by the
   package its docstring named. An expected failure is not a failure and an
   unexpected success is; they are tracked separately for that reason.
 
@@ -554,5 +557,6 @@ against its own input.
 - Retired ZIP/XML structural optimization and unused-style removal stages; their
   source remains in `legacy/` for reference and is not imported by the running app.
 
+[Unreleased]: https://github.com/Abe-Borg/Spec_Cleanse/compare/v1.1.0...HEAD
 [1.1.0]: https://github.com/Abe-Borg/Spec_Cleanse/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Abe-Borg/Spec_Cleanse/releases/tag/v1.0.0

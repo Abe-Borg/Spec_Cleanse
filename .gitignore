@@ -39,4 +39,9 @@ htmlcov/
 # macOS system files
 .DS_Store
 
+# Specification documents. They are usually proprietary, and the suite builds
+# its fixtures in temporary directories, so none belongs in the repository.
+# Keep real specifications in spec_testing/ or outside the checkout.
+*.doc
+*.docx
 spec_testing/
