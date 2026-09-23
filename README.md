@@ -482,8 +482,8 @@ behind exactly that difference. The rules that decide whether a batch is safe to
 write live in `batch.py` rather than `gui.py` for that reason, so they are
 exercised wherever the suite runs at all.
 
-Both CI lanes run the whole suite on every pull request and every push to
-`master`: `windows (3.12)`, matching the interpreter the released executable is
+CI runs the whole suite on every pull request and every push to `master`, in two
+lanes: `windows (3.12)`, matching the interpreter the released executable is
 built with, and `linux (3.10, oldest supported)`. The Windows lane additionally
 imports `gui` before the suite starts, because a Windows runner without `tkinter`
 would skip every GUI test and still exit 0 — indistinguishable from a passing run.
@@ -498,19 +498,11 @@ produced its input proves nothing. One of those cases asserts that a *correct* c
 still passes, which is what stops the whole contract being satisfied by a verifier
 that simply distrusts everything.
 
-Continuous integration runs the suite on every pull request and every push to
-`master`, in two lanes: Windows on the Python version the executable is built with,
-and Linux on 3.10, the oldest version this project claims to support. The Windows
-lane checks that `gui.py` imports before running anything, because a skip exits zero
-and a lane that skipped the GUI tests would otherwise look exactly like one that
-passed them.
-
-Some tests are carried as `unittest.expectedFailure` — cases that describe
-behaviour a later change will fix. The suite stays green while they fail, and turns
-red if one ever starts passing, which is what prompts removing the decorator along
-with the defect. Today they cover an inline placeholder excusing the deletion of a
-requirement word beside it, and five requirement sentences the shipped patterns
-currently remove.
+A test describing behaviour a later change will fix is carried as
+`unittest.expectedFailure`. The suite stays green while it fails, and turns red if
+it ever starts passing, which is what prompts removing the decorator along with the
+defect. None is carried today: the last ones were closed by the fixes they
+anticipated.
 
 ## Developer tools
 
@@ -566,7 +558,8 @@ Spec_Cleanse/
 ├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
 ├── tools/              # Developer measurement utilities (not imported by the app)
-│   └── benchmark_pipeline.py  # Pipeline timings on synthetic fixtures
+│   ├── actions.py             # What a build would do, one row per action
+│   ├── benchmark_pipeline.py  # Pipeline timings on synthetic fixtures
 │   ├── census_formatting.py   # Cost of turning formatting-only removal off
 │   ├── census_references.py   # Removals inside referenced bookmark ranges
 │   └── corpus_compare.py      # Record decisions, diff two builds
@@ -580,6 +573,7 @@ Spec_Cleanse/
 │   ├── speccleanse.spec  # PyInstaller build
 │   └── installer.iss     # Inno Setup installer
 ├── .github/workflows/
+│   ├── tests.yml       # Runs the suite on every pull request and push to master
 │   └── release.yml     # Builds and attaches release assets on a tag
 ├── README.md
 ├── CHANGELOG.md

@@ -777,7 +777,7 @@ Two conventions matter here:
   `tests/test_verify.py` how it was carried until W03 replaced the containment
   predicate with interval coverage. Both reported the unexpected success that said the
   decorator could go. No case currently carries one — when you add one, its docstring
-  names the package that closes it.
+  names the change that closes it.
 - **A measurement tool is held to the same standard as the code it measures.**
   Everything under `tools/` is tested, because a wrong number is what a decision
   gets taken on. Two traps, both of which produced real bugs here:

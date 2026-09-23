@@ -1,8 +1,8 @@
 """Census B — how much of a clean sits inside a referenced bookmark range.
 
-The plan considered protecting the content of every bookmark a `REF` field
-points at, and rescoped that to detect-and-report because the effect on
-cleaning volume was never bounded. Word bookmarks headings it cross-references,
+Protecting the content of every bookmark a `REF` field points at was
+considered, and rescoped to detect-and-report because the effect on cleaning
+volume was never bounded. Word bookmarks headings it cross-references,
 so "protect referenced ranges" could in principle suppress most of a clean —
 or almost none of it. Nobody has measured which.
 
@@ -21,9 +21,8 @@ Nothing is written; the clean is a dry run.
     python -m tools.census_references /path/to/folder
 
 The field-instruction reader here is deliberately simple, because a census can
-tolerate a miss that the cleaner could not. W06 needs the same reader for real,
-and should promote a stricter version of it into docx_xml.py rather than import
-this one.
+tolerate a miss that the cleaner could not. Verification reads references with
+the stricter `docx_xml.reference_target()`, not with this one.
 """
 
 import re
