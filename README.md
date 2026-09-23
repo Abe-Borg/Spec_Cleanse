@@ -576,10 +576,6 @@ Spec_Cleanse/
 │   ├── docx_builder.py # Synthetic .docx fixtures
 │   ├── support.py      # Shared test-case base
 │   └── test_*.py
-├── legacy/
-│   ├── style_cleaner.py
-│   ├── deep_cleaner.py
-│   └── README.md
 ├── packaging/
 │   ├── speccleanse.spec  # PyInstaller build
 │   └── installer.iss     # Inno Setup installer

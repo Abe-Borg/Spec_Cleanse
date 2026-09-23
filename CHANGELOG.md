@@ -310,6 +310,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `errors`, which decide `success`.
 - `docx_xml.is_layout_break()` and `docx_xml.spans_cover()`.
 
+### Removed
+
+- `legacy/`, the source of the deep-clean and style-clean stages retired before
+  1.0.0. Nothing imported it, no test exercised it, and it never shipped in the
+  executable. `git checkout v1.1.0 -- legacy/` restores it.
+
 ### Fixed
 
 - **The verifier resolves `patterns.yaml` the same way the app does.** Asked to

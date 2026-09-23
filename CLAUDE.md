@@ -14,7 +14,7 @@ Every clean run performs:
 1. **Shallow content removal** — pattern + formatting detection inside `document.xml`, headers, footers, footnotes, and endnotes
 2. **Verification** — input/output comparison classifies every removed paragraph as expected, unexpected, or a preserve violation
 
-There is no longer a "deep clean" or "style clean" stage in the active pipeline. Earlier versions had ZIP/XML structural optimization and unused-style removal stages; both were retired because they changed document metadata without meaningfully improving downstream LLM extraction. Their source still lives in `legacy/` for reference but is not imported by the running app.
+There is no longer a "deep clean" or "style clean" stage in the active pipeline. Earlier versions had ZIP/XML structural optimization and unused-style removal stages; both were retired because they changed document metadata without meaningfully improving downstream LLM extraction. Their source was archived in `legacy/` and has since been deleted; `git checkout v1.1.0 -- legacy/` restores it.
 
 ### Module Responsibilities
 
@@ -29,8 +29,6 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
 | `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `benchmark_pipeline` (timings on synthetic fixtures, all eight §16.1 families; **not** the corpus harness), `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
-| `legacy/deep_cleaner.py` | Archived; not used |
-| `legacy/style_cleaner.py` | Archived; not used |
 
 `docx_xml.py` holds document-model plumbing only — it knows how WordprocessingML
 nests runs inside paragraphs and which containers Word refuses to open when empty,
