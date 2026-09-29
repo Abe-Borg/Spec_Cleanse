@@ -11,6 +11,13 @@ name: Release
 #
 # A tag can only be built if it contains the packaging, which is checked below.
 # Tags cut before it existed cannot be backfilled with assets.
+#
+# THIRD_PARTY_NOTICES.txt ships beside both executables: the installer installs
+# it, and it is attached to the release (and to a pull request's workflow run)
+# next to the portable one, which has nowhere of its own to carry it. Before
+# anything is built it is checked against the license files installed on this
+# runner, so the texts shipped are the ones of the Python, Tcl/Tk, lxml, PyYAML
+# and PyInstaller actually being bundled.
 
 on:
   push:
@@ -40,6 +47,7 @@ on:
       - "requirements.txt"
       - "requirements-build.txt"
       - "patterns.yaml"
+      - "THIRD_PARTY_NOTICES.txt"
       - "*.py"
 
 permissions:
@@ -93,7 +101,8 @@ jobs:
         run: |
           missing=""
           for f in requirements-build.txt packaging/speccleanse.spec \
-                   packaging/installer.iss apppaths.py; do
+                   packaging/installer.iss packaging/check_notices.py \
+                   apppaths.py THIRD_PARTY_NOTICES.txt; do
             [ -f "$f" ] || missing="${missing} ${f}"
           done
           if [ -n "$missing" ]; then
@@ -101,9 +110,11 @@ jobs:
             echo ""
             echo "Assets can only be built from a commit that contains the build"
             echo "tooling. A tag predating it cannot be built here — and should not"
-            echo "be: it also predates the fix for patterns.yaml being read from"
+            echo "be: v1.0.0 predates the fix for patterns.yaml being read from"
             echo "PyInstaller's temporary extraction directory, so the executable"
-            echo "would ship a build whose pattern edits silently do nothing."
+            echo "would ship a build whose pattern edits silently do nothing, and"
+            echo "every tag up to v1.1.0 predates THIRD_PARTY_NOTICES.txt, so its"
+            echo "assets would ship without the license notices of what they bundle."
             echo "Cut a new tag from a commit that has the packaging instead."
             exit 1
           fi
@@ -118,6 +129,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-build.txt
 
+      - name: Check the third-party notices against this machine
+        # The notices were assembled from upstream sources. This compares them,
+        # word for word, with the license files of the Python, Tcl/Tk, lxml,
+        # PyYAML and PyInstaller installed here — the ones about to be bundled —
+        # and fails if any is missing or a version has moved on. See the
+        # script's docstring for what is compared and why whitespace is not.
+        run: python packaging/check_notices.py --require-runtime
+
       - name: Run tests
         # Windows has tkinter, so the GUI tests that skip on Linux run here.
         run: python -m unittest discover -s tests -t .
@@ -130,6 +149,12 @@ jobs:
         run: |
           test -f dist/SpecCleanse.exe || { echo "PyInstaller produced no exe"; exit 1; }
           ls -lh dist/SpecCleanse.exe
+
+      - name: List what the executable bundles
+        # Every binary and data file inside the executable, for the log. This is
+        # the list THIRD_PARTY_NOTICES.txt has to cover: when a dependency or a
+        # new import brings in a library, it shows up here first.
+        run: pyi-archive_viewer --list --brief dist/SpecCleanse.exe
 
       - name: Locate Inno Setup
         id: iscc
@@ -156,10 +181,14 @@ jobs:
           packaging\installer.iss
         shell: pwsh
 
-      - name: Name the portable executable after its version
+      - name: Stage the portable executable and the notices
+        # The notices are copied into dist/ so the artifact below stays flat:
+        # upload-artifact keeps paths relative to the files' common ancestor,
+        # which a file at the repository root would move up to the root.
         shell: bash
         run: |
           cp dist/SpecCleanse.exe "dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe"
+          cp THIRD_PARTY_NOTICES.txt dist/
           ls -lh dist/
 
       - name: Upload build artifacts
@@ -171,6 +200,7 @@ jobs:
           path: |
             dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe
             dist/SpecCleanse-Setup-${{ steps.version.outputs.version }}.exe
+            dist/THIRD_PARTY_NOTICES.txt
           if-no-files-found: error
 
       - name: Attach the assets to the release
@@ -190,4 +220,5 @@ jobs:
           gh release upload "$tag" \
             "dist/SpecCleanse-${version}-portable.exe" \
             "dist/SpecCleanse-Setup-${version}.exe" \
+            dist/THIRD_PARTY_NOTICES.txt \
             --clobber
