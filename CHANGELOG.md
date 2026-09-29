@@ -224,6 +224,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `THIRD_PARTY_NOTICES.txt`, the license texts of everything the Windows assets
+  bundle (see *Fixed*), each taken from the file named in its section at the
+  version the release build uses, never retyped.
+- `packaging/check_notices.py`, run by the release workflow before anything is
+  built. It compares the notices word for word with the license files installed
+  on the build machine — Python's `LICENSE.txt`, Tk's `license.terms`, and the
+  license files of lxml, PyYAML and PyInstaller — and fails if a text differs or
+  the installed version is not the one the notices name. Whitespace is not
+  compared, since line endings and Python's MSBuild-joined `LICENSE.txt` differ
+  in it; every word, in order, is.
+- `tests/test_packaging.py`. Every `Source:` the installer takes from the
+  repository must exist, so renaming one fails the suite rather than the next
+  tag's installer build; so must its `LicenseFile`. The release workflow must
+  ship the notices beside the portable executable and check them before
+  building. And the notices must reproduce the installed lxml and PyYAML at the
+  pinned version, so upgrading either in `requirements.txt` fails on every pull
+  request until the notices are rebuilt from the new wheel.
+- The release workflow lists every file inside the built executable in its log,
+  which is the list the notices have to cover, and builds on pull requests that
+  edit `THIRD_PARTY_NOTICES.txt`.
+
 - **Numbering notices**, a category of their own on `VerificationResult`. A
   removed paragraph that took part in automatic numbering makes a run need review
   without claiming anything was lost: nothing went missing, but the numbers a
@@ -315,6 +336,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   executable. `git checkout v1.1.0 -- legacy/` restores it.
 
 ### Fixed
+
+- **The Windows release assets now carry the license notices of what they
+  bundle.** PyInstaller packs Python, Tcl/Tk, lxml, PyYAML and the libraries
+  they are built with into the executable, and their licenses require their
+  notices to go with it — Tcl/Tk's verbatim. Neither asset did: the installer
+  installed only SpecCleanse's own README, changelog and license, and the
+  portable executable shipped alone. `THIRD_PARTY_NOTICES.txt` now holds every
+  one of those licenses. The installer installs it, and each release carries it
+  as an asset beside the portable executable, which has no readable place of its
+  own to keep it. It is not bundled inside the executable: PyInstaller unpacks
+  its data into a temporary directory deleted on exit, and nothing in the app
+  shows it, so a copy there would reach no one.
+
+  The file covers more than the four components the README used to list.
+  lxml's Windows wheel compiles libxml2, libxslt, zlib and GNU libiconv into
+  `etree.pyd` and ships none of their licenses; PyYAML's compiles in LibYAML.
+  Python's Windows build brings the Microsoft C runtime, bzip2, libffi, OpenSSL,
+  expat, libmpdec and XZ Utils, and PyInstaller embeds its own bootloader and
+  Apache-licensed run-time hooks. Each version was confirmed from the shipped
+  binary or its build definition rather than assumed. GNU libiconv is under the
+  LGPL, not a permissive license; the README now says so.
+
+  Assets already published for v1.1.0 still lack the notices. The release
+  workflow now refuses to build any tag that predates the file.
 
 - **The verifier resolves `patterns.yaml` the same way the app does.** Asked to
   verify without an engine, it read the file beside its own module, which in a
@@ -445,9 +490,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance figures quoted above are from one machine and one interpreter,
   on synthetic fixtures. They are review targets, not thresholds asserted in
   CI, and no real specification corpus has been measured.
-- Suite at the time of writing: 449 tests. Where `tkinter` is absent the 15 GUI
-  tests skip, leaving 434 passed on Linux with Python 3.11 and lxml 6.0.2; both
-  CI lanes have `tkinter` and pass all 449. None is carried under
+- Suite at the time of writing: 465 tests. Where `tkinter` is absent the 15 GUI
+  tests skip, leaving 450 passed on Linux with Python 3.11 and lxml 6.0.2; both
+  CI lanes have `tkinter` and pass all 465.
+- `THIRD_PARTY_NOTICES.txt` describes the release build: Python 3.12.10 on
+  `windows-latest`, which is the last 3.12 with Windows binaries, and the
+  pinned lxml and PyYAML. A move to another Python fails the release
+  workflow's notices check until the Python sections are rebuilt from that
+  version's files. None is carried under
   `unittest.expectedFailure`: every case that was has since been closed by the
   package its docstring named. An expected failure is not a failure and an
   unexpected success is; they are tracked separately for that reason.

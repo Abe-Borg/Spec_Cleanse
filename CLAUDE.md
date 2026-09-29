@@ -45,6 +45,8 @@ but no detection policy. Anything that decides *what* to remove belongs in
 | `requirements-build.txt` | Build-time only (PyInstaller); not needed to run from source |
 | `packaging/speccleanse.spec` | PyInstaller build definition |
 | `packaging/installer.iss` | Inno Setup installer definition |
+| `THIRD_PARTY_NOTICES.txt` | License texts of everything the Windows assets bundle; ships with both |
+| `packaging/check_notices.py` | Release-build check that the notices match the build machine's license files |
 
 ### Data Flow
 
@@ -828,17 +830,90 @@ than to a release, so a build break is found before merge.
 
 A tag can only be built if its tree contains the packaging: a tag build checks
 out that tag alone, so anything added later is simply absent. The workflow
-verifies `requirements-build.txt`, both files under `packaging/` and `apppaths.py`
-are present straight after checkout and stops with the reason if they are not.
+verifies `requirements-build.txt`, the three files under `packaging/`,
+`apppaths.py` and `THIRD_PARTY_NOTICES.txt` are present straight after checkout
+and stops with the reason if they are not.
 `v1.0.0` therefore has no assets and is not going to get any — it also predates
 `apppaths.py`, so an executable built from it would read `patterns.yaml` out of
 PyInstaller's temporary extraction directory and silently discard every edit.
 Assets start at the first tag cut after packaging landed.
 
-Two assets are produced: `SpecCleanse-<version>-portable.exe` (a single windowed
-executable) and `SpecCleanse-Setup-<version>.exe` (an Inno Setup installer that
-installs per-user, so it needs no administrator rights). Neither is code-signed,
-so SmartScreen warns on first run.
+Two executables are produced: `SpecCleanse-<version>-portable.exe` (a single
+windowed executable) and `SpecCleanse-Setup-<version>.exe` (an Inno Setup
+installer that installs per-user, so it needs no administrator rights). Neither
+is code-signed, so SmartScreen warns on first run. `THIRD_PARTY_NOTICES.txt` is
+attached beside them as a third asset — see below.
+
+### Third-party notices
+
+The executable bundles Python, Tcl/Tk, lxml, PyYAML, PyInstaller's bootloader and
+run-time hooks, and what those are built with. Their licenses require their
+notices to travel with the binary — Tcl/Tk's verbatim — and
+`THIRD_PARTY_NOTICES.txt` holds them.
+
+**How it ships.** The installer installs it (`[Files]`, beside `LICENSE.md`). The
+portable executable cannot carry a readable copy, so the release attaches the file
+as an asset beside it; the workflow stages it into `dist\` so the artifact stays
+flat. It is deliberately *not* in the spec's `datas`: that unpacks into
+PyInstaller's temporary extraction directory, deleted on exit, and nothing in the
+app shows it, so a copy there reaches no one. Bundle it only alongside an About
+dialog that displays it.
+
+**What it has to cover is more than the obvious four**, and each of these was
+found in the binaries rather than assumed:
+
+- lxml's Windows wheel compiles libxml2 2.11.9, libxslt/libexslt 1.1.39, zlib
+  1.3.1 and **GNU libiconv 1.17 (LGPL-2.1-or-later)** into `etree.pyd`, and ships
+  none of their licenses — only its own `LICENSE.txt` and a `LICENSES.txt` that
+  points at `doc/licenses/*.txt` it also leaves out. Versions come from lxml's
+  changelog and are confirmed in `etree.pyd`: `21109` and `10139` are libxml2's
+  and libxslt's version constants, zlib's banner names 1.3.1, and libiconv's
+  alias table has its own encodings but not 1.18's `GB18030:2022`.
+- PyYAML's `_yaml.pyd` compiles in LibYAML 0.2.5.
+- Python's Windows `LICENSE.txt` is not one file upstream. `PCbuild/regen.targets`
+  (`_RegenLicense`) writes it by joining `LICENSE`, `PC/crtlicense.txt`, and the
+  bzip2, libffi, OpenSSL, Tcl, Tk and Tix license files from the prebuilt
+  externals `PCbuild/get_externals.bat` names. That joined file is where Tcl/Tk's
+  verbatim notice lives, and Tcl's and Tk's copies differ.
+- Expat, libmpdec and zlib reach the bundle through Python's own modules but are
+  in neither file above; CPython lists them in `Doc/license.rst`, whose
+  incorporated-software section is reproduced whole.
+- PyInstaller's run-time hooks and modules are Apache-2.0, which needs its text
+  delivered too; its `COPYING.txt` carries that and the bootloader exception.
+- lxml's isoschematron resources, collected with the rest of lxml although
+  unused, carry notices in their own comments.
+
+**How it is verified.** `packaging/check_notices.py --require-runtime` runs in the
+release workflow before the build. It compares the notices with the license files
+on the runner itself — Python's `LICENSE.txt` a paragraph at a time and in order
+(the notices label its parts; order is what stops Tcl's paragraph vouching for
+Tk's), everything else whole — ignoring whitespace but no words, and checks the
+installed versions are the ones the notices name. `tests/test_packaging.py` runs
+the lxml/PyYAML half on every pull request, since those are pinned and identical
+everywhere, and checks every installer `Source:` exists. The Python half cannot be
+a unit test: it depends on the interpreter, and would fail for a contributor on
+Windows running any Python but 3.12.10. The workflow also logs
+`pyi-archive_viewer --list --brief` of the built executable, which is the list the
+notices have to cover.
+
+**Updating it** means taking texts from files, never from memory. When a
+version moves, the check names what no longer matches. The sources, all readable
+without a Windows machine:
+
+| Section | From |
+|---|---|
+| Python `LICENSE.txt` parts | CPython tag `v<version>`: `LICENSE`, `PC/crtlicense.txt`; `python/cpython-bin-deps` / `cpython-source-deps` at the branches `get_externals.bat` names |
+| Python incorporated software | CPython tag: `Doc/license.rst`, from "Licenses and Acknowledgements for Incorporated Software" to the end |
+| lxml, PyYAML, PyInstaller | the win_amd64 cp312 wheel's `.dist-info/licenses/`; lxml's `doc/licenses/` from its sdist |
+| libxml2, libxslt, zlib, libiconv | upstream source at the version in lxml's changelog, confirmed in `etree.pyd` |
+| LibYAML | upstream source at the version in `_yaml.pyd` |
+
+`windows-latest` resolves `python-version: "3.12"` to 3.12.10, the last 3.12
+with Windows binaries; the later 3.12 releases are source-only. So the Python
+sections change only when the workflow moves to another minor version.
+
+Assets published for v1.1.0 and earlier have no notices, and the workflow's
+packaging check refuses to rebuild those tags, since the file is absent from them.
 
 ### patterns.yaml in a frozen build
 

@@ -46,6 +46,7 @@ Download either from the [latest release](https://github.com/Abe-Borg/Spec_Clean
 |-------|-------------|
 | `SpecCleanse-Setup-<version>.exe` | You want it installed, with a Start Menu entry and an uninstaller |
 | `SpecCleanse-<version>-portable.exe` | You want to run it from a folder or a network share with nothing installed |
+| `THIRD_PARTY_NOTICES.txt` | Always, with the portable executable: the license texts of everything bundled inside it (see [Third-party components](#third-party-components)). The installer puts its own copy in the install folder |
 
 The installer is per-user: it writes to `%LOCALAPPDATA%\Programs\SpecCleanse`,
 needs no administrator rights, and asks for no elevation prompt. Neither build
@@ -571,13 +572,15 @@ Spec_Cleanse/
 │   └── test_*.py
 ├── packaging/
 │   ├── speccleanse.spec  # PyInstaller build
-│   └── installer.iss     # Inno Setup installer
+│   ├── installer.iss     # Inno Setup installer
+│   └── check_notices.py  # Checks the notices against the build machine's license files
 ├── .github/workflows/
 │   ├── tests.yml       # Runs the suite on every pull request and push to master
 │   └── release.yml     # Builds and attaches release assets on a tag
 ├── README.md
 ├── CHANGELOG.md
-└── LICENSE.md
+├── LICENSE.md
+└── THIRD_PARTY_NOTICES.txt  # License texts of everything bundled into the Windows assets
 ```
 
 ## Building the Windows executable
@@ -595,20 +598,30 @@ checks for the build tooling after checkout and stops with that explanation
 rather than failing obscurely later.
 
 The same workflow also runs on pull requests that touch the packaging or what
-goes into it. Those builds attach the two executables to the workflow run instead
-of to a release, so a broken build shows up before merge and the result can be
-downloaded and tried from the PR's Checks tab.
+goes into it, `THIRD_PARTY_NOTICES.txt` included. Those builds attach the two
+executables and the notices to the workflow run instead of to a release, so a
+broken build shows up before merge and the result can be downloaded and tried
+from the PR's Checks tab.
+
+Before building, the workflow checks `THIRD_PARTY_NOTICES.txt` against the
+license files installed on the runner (see [Third-party
+components](#third-party-components)), and after building it lists every file
+inside the executable in its log.
 
 To build locally on Windows:
 
 ```bat
 pip install -r requirements.txt -r requirements-build.txt
+python packaging\check_notices.py --require-runtime
 pyinstaller packaging\speccleanse.spec --noconfirm
 iscc /DAppVersion=1.0.0 packaging\installer.iss
 ```
 
 Both land in `dist\`. The installer step needs [Inno Setup 6](https://jrsoftware.org/isdl.php);
-skip it if you only want the portable executable.
+skip it if you only want the portable executable. The notices check fails on any
+Python other than the 3.12.10 the release is built with, because the notices then
+do not describe your build; skip it for a build you are only trying out, not for
+one you hand to anyone.
 
 ## Releases
 
@@ -633,9 +646,9 @@ client work. To request a commercial license, open an issue on this repository.
 
 ### Third-party components
 
-SpecCleanse depends on the following, all under permissive licenses. `lxml` and
-`PyYAML` are installed via `pip` rather than vendored, so no additional notices
-ship with this source distribution.
+Run from source, SpecCleanse depends on the following. `lxml` and `PyYAML` are
+installed via `pip`, and `tkinter` comes with Python; none is vendored, so no
+additional notices ship with this source distribution.
 
 | Component | License |
 |-----------|---------|
@@ -644,8 +657,55 @@ ship with this source distribution.
 | tkinter (Python standard library) | PSF-2.0 |
 | [Tcl and Tk](https://www.tcl.tk/) (runtimes behind `tkinter`) | TCL/TK License (BSD-style) |
 
-If you build a standalone binary (e.g. PyInstaller), it bundles all of the above
-and you must include their license texts in your distribution. Note that the Tcl
-and Tk runtimes are separately copyrighted from the PSF-licensed `tkinter`
+**The Windows release assets are different.** PyInstaller packs all of the above
+into the executable, together with the Python interpreter and the libraries it and
+lxml and PyYAML are built with. [`THIRD_PARTY_NOTICES.txt`](./THIRD_PARTY_NOTICES.txt)
+reproduces the license of every one of them, verbatim, and ships with both assets:
+the installer puts it in the install folder, and every release carries it as a
+download beside the portable executable, which cannot carry a readable copy of its
+own. Keep it with the portable executable if you pass that on.
+
+What the executables contain, and so what the notices cover:
+
+| Component | License | How it gets in |
+|-----------|---------|----------------|
+| Python 3.12.10: interpreter, standard library, `tkinter` | PSF-2.0 | PyInstaller bundles the interpreter it runs under |
+| Microsoft C runtime (`vcruntime140.dll`) | Microsoft Distributable Code terms | Python's Windows build |
+| bzip2, libffi, OpenSSL, expat, zlib, libmpdec, XZ Utils | Permissive (OpenSSL: Apache-2.0) | Python's Windows build |
+| Tcl 8.6.15, Tk 8.6.15, Tix 8.4.3 | TCL/TK License | Behind `tkinter` |
+| lxml 6.0.2 | BSD-3-Clause; ElementTree-derived parts under the ElementTree license | `requirements.txt` |
+| libxml2 2.11.9, libxslt/libexslt 1.1.39 | MIT | Compiled into lxml's Windows wheel |
+| zlib 1.3.1 | zlib | Compiled into lxml's Windows wheel |
+| GNU libiconv 1.17 | **LGPL-2.1-or-later** | Compiled into lxml's Windows wheel |
+| PyYAML 6.0.3 | MIT | `requirements.txt` |
+| LibYAML 0.2.5 | MIT | Compiled into PyYAML's Windows wheel |
+| PyInstaller bootloader, run-time hooks and modules | GPL-2.0-or-later with a bootloader exception; Apache-2.0 | PyInstaller |
+
+The Tcl and Tk runtimes are separately copyrighted from the PSF-licensed `tkinter`
 wrapper, and their license requires its notice be reproduced **verbatim** in any
-distribution.
+distribution. It is, in section 1 of the notices, exactly as Python's Windows
+build ships it. Tcl and Tk carry separate copies of those terms, and they are not
+identical — Tk's also names Apple Inc. — so both are there.
+
+Two things about that table are easy to miss. The libraries compiled *into* lxml
+and PyYAML appear nowhere as files of their own, and lxml's wheel does not ship
+their licenses, so a bundle assembled from the wheels' own license files alone
+leaves them out. And one of them, GNU libiconv, is under the LGPL rather than a
+permissive license. The notices reproduce its license and say where its source
+is; that is what a notices file can do, and it says nothing about whether the
+LGPL's other conditions for a library linked into a program are met.
+
+The texts were taken from the files themselves, at the versions the release
+build uses, never retyped. Before building anything, the release workflow runs
+`packaging/check_notices.py`, which compares them word for word with the license
+files installed on the build machine — Python's own `LICENSE.txt` (which is where
+its Windows build puts the Tcl and Tk terms), and those of lxml, PyYAML and
+PyInstaller — and fails if any text differs or the installed version is not the
+one the notices name. The test suite makes the same check for lxml and PyYAML on
+every pull request, so upgrading either in `requirements.txt` fails until the
+notices are rebuilt from the new wheel.
+
+If you build a standalone binary of your own, ship `THIRD_PARTY_NOTICES.txt`
+with it, and run `python packaging/check_notices.py --require-runtime` first: the
+notices describe the release build, and the check says whether they describe
+yours.
