@@ -47,6 +47,12 @@ Download either from the [latest release](https://github.com/Abe-Borg/Spec_Clean
 | `SpecCleanse-Setup-<version>.exe` | You want it installed, with a Start Menu entry and an uninstaller |
 | `SpecCleanse-<version>-portable.exe` | You want to run it from a folder or a network share with nothing installed |
 | `THIRD_PARTY_NOTICES.txt` | Always, with the portable executable: the license texts of everything bundled inside it (see [Third-party components](#third-party-components)). The installer puts its own copy in the install folder |
+| `LICENSE.md` | SpecCleanse's own license terms, as a file beside the portable executable. The installer installs it too |
+| `libiconv-1.17-source.tar.gz`, `lxml-6.0.2.tar.gz` | Only if you want to rebuild with a modified GNU libiconv, which the LGPL entitles you to — see [Third-party components](#third-party-components) |
+
+Releases up to and including **v1.1.0** carry the two executables only, with none
+of the files above and no About dialog, although they bundle the same third-party
+components. The first release after v1.1.0 is the first to carry them.
 
 The installer is per-user: it writes to `%LOCALAPPDATA%\Programs\SpecCleanse`,
 needs no administrator rights, and asks for no elevation prompt. Neither build
@@ -92,6 +98,11 @@ network folder.
 3. (Optional) tick **Strip comments and accept tracked changes** — see below.
 4. Click **Preview** to run a dry-run detection report.
 5. Click **CLEAN** to write cleaned documents (`*_cleaned.docx`).
+
+**About** (top right) shows the copyright, the license and where to ask about
+commercial licensing or report a problem, and opens the full license and the
+third-party notices. The Windows executables carry both documents inside them, so
+they are readable however the program reached you.
 
 Processing runs on a background thread with a live log and progress bar. A file left
 open in Word is reported as such instead of as an error code.
@@ -557,6 +568,7 @@ Spec_Cleanse/
 ├── verify.py           # Input/output comparison and structural lint
 ├── docx_xml.py         # Shared WordprocessingML plumbing and config loading
 ├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
+├── about.py            # Copyright, license and contact text for the About dialog
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
 ├── tools/              # Developer measurement utilities (not imported by the app)
 │   ├── actions.py             # What a build would do, one row per action
@@ -598,8 +610,9 @@ checks for the build tooling after checkout and stops with that explanation
 rather than failing obscurely later.
 
 The same workflow also runs on pull requests that touch the packaging or what
-goes into it, `THIRD_PARTY_NOTICES.txt` included. Those builds attach the two
-executables and the notices to the workflow run instead of to a release, so a
+goes into it, `THIRD_PARTY_NOTICES.txt` and `LICENSE.md` included. Those builds
+attach the two executables, the notices, the license and the LGPL source archives
+to the workflow run instead of to a release, so a
 broken build shows up before merge and the result can be downloaded and tried
 from the PR's Checks tab.
 
@@ -660,10 +673,12 @@ additional notices ship with this source distribution.
 **The Windows release assets are different.** PyInstaller packs all of the above
 into the executable, together with the Python interpreter and the libraries it and
 lxml and PyYAML are built with. [`THIRD_PARTY_NOTICES.txt`](./THIRD_PARTY_NOTICES.txt)
-reproduces the license of every one of them, verbatim, and ships with both assets:
-the installer puts it in the install folder, and every release carries it as a
-download beside the portable executable, which cannot carry a readable copy of its
-own. Keep it with the portable executable if you pass that on.
+reproduces the license of every one of them, verbatim, and ships with both assets
+of every release after v1.1.0: the installer puts it in the install folder, the
+release carries it as a download beside the portable executable, and both
+executables bundle a copy that **About → Third-party notices** displays. Keep the
+file with the portable executable if you pass that on anyway — it is readable
+without running anything.
 
 What the executables contain, and so what the notices cover:
 
@@ -691,9 +706,28 @@ Two things about that table are easy to miss. The libraries compiled *into* lxml
 and PyYAML appear nowhere as files of their own, and lxml's wheel does not ship
 their licenses, so a bundle assembled from the wheels' own license files alone
 leaves them out. And one of them, GNU libiconv, is under the LGPL rather than a
-permissive license. The notices reproduce its license and say where its source
-is; that is what a notices file can do, and it says nothing about whether the
-LGPL's other conditions for a library linked into a program are met.
+permissive license.
+
+The LGPL asks more than a notice of a program a library is linked into: whoever
+has the program must be able to get the library's source, rebuild the program
+with a modified copy of it, and be allowed to do so. libiconv is linked statically
+into lxml's `etree.pyd`, so that is how each release after v1.1.0 meets it:
+
+- **Source.** The release attaches `libiconv-1.17-source.tar.gz` — the
+  `winlibs/libiconv` tree lxml's Windows build compiles, at a commit the workflow
+  verifies — and `lxml-6.0.2.tar.gz`, the source of the lxml it is linked into,
+  checked against its published hash. SpecCleanse's own source is on the same
+  release page. Offering the source from the same place as the binary is what
+  LGPL-2.1 section 6(d) asks.
+- **Relinking.** Build libiconv from that source, build lxml against it, and
+  build SpecCleanse as [Building the Windows executable](#building-the-windows-executable)
+  describes.
+- **Terms.** Section 9 of the notices states that SpecCleanse's own license does
+  not limit what the LGPL lets you do with libiconv: you may modify it for your
+  own use and reverse engineer the executable to debug such modifications, which
+  is what section 6 requires the terms of the combined program to allow.
+
+That describes how the release is put together; it is not legal advice.
 
 The texts were taken from the files themselves, at the versions the release
 build uses, never retyped. Before building anything, the release workflow runs

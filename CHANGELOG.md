@@ -224,6 +224,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An About dialog**, from a button at the top right of the window. It shows the
+  copyright line, the license and its URL, and where to ask about commercial
+  licensing or report a problem, and opens the full `LICENSE.md` and
+  `THIRD_PARTY_NOTICES.txt`, which the executable now carries inside it. The text
+  lives in `about.py`, apart from `gui.py`, and a test holds its copyright line
+  and URL to the ones `LICENSE.md` contains. `apppaths.bundled_file()` finds the
+  two documents from source and in a frozen build.
 - `THIRD_PARTY_NOTICES.txt`, the license texts of everything the Windows assets
   bundle (see *Fixed*), each taken from the file named in its section at the
   version the release build uses, never retyped.
@@ -345,9 +352,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   portable executable shipped alone. `THIRD_PARTY_NOTICES.txt` now holds every
   one of those licenses. The installer installs it, and each release carries it
   as an asset beside the portable executable, which has no readable place of its
-  own to keep it. It is not bundled inside the executable: PyInstaller unpacks
-  its data into a temporary directory deleted on exit, and nothing in the app
-  shows it, so a copy there would reach no one.
+  own to keep it. The executable also carries a copy inside it, which the new
+  About dialog displays.
 
   The file covers more than the four components the README used to list.
   lxml's Windows wheel compiles libxml2, libxslt, zlib and GNU libiconv into
@@ -360,6 +366,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Assets already published for v1.1.0 still lack the notices. The release
   workflow now refuses to build any tag that predates the file.
+
+- **The portable executable now carries SpecCleanse's own terms.** PolyForm asks
+  that whoever gets a copy also gets the terms or their URL and the
+  `Required Notice:` line. The installer's license page delivered them, but a
+  silent install skips it and the portable executable had no installer at all,
+  nor did the notices beside it name the URL or the copyright line. Now the
+  notices state both, `LICENSE.md` is attached to each release, and the About
+  dialog shows them from inside the program. The installer is unchanged: it
+  already installed `LICENSE.md` in every mode.
+
+- **The LGPL's conditions for GNU libiconv are met, not only its notice.**
+  libiconv is linked statically into lxml's `etree.pyd`, and the LGPL asks that
+  whoever has such a program can get the library's source, rebuild with a
+  modified copy, and is allowed to. Each release now attaches
+  `libiconv-1.17-source.tar.gz` — the `winlibs/libiconv` tree lxml's Windows
+  build compiles, at a verified commit — and the lxml 6.0.2 source it is linked
+  into, checked against its published hash, so the source is offered from the
+  same place as the binary. Section 9 of the notices says how to relink and
+  states that SpecCleanse's license does not limit modifying libiconv or
+  reverse engineering the executable to debug such modifications.
+  `tests/test_packaging.py` holds the archived versions to `requirements.txt`
+  and to the notices.
 
 - **The verifier resolves `patterns.yaml` the same way the app does.** Asked to
   verify without an engine, it read the file beside its own module, which in a
@@ -490,9 +518,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance figures quoted above are from one machine and one interpreter,
   on synthetic fixtures. They are review targets, not thresholds asserted in
   CI, and no real specification corpus has been measured.
-- Suite at the time of writing: 465 tests. Where `tkinter` is absent the 15 GUI
-  tests skip, leaving 450 passed on Linux with Python 3.11 and lxml 6.0.2; both
-  CI lanes have `tkinter` and pass all 465.
+- Suite at the time of writing: 477 tests. Where `tkinter` is absent the 15 GUI
+  tests skip, leaving 462 passed on Linux with lxml 6.0.2; with `tkinter`, as
+  both CI lanes have, all 477 pass.
 - `THIRD_PARTY_NOTICES.txt` describes the release build: Python 3.12.10 on
   `windows-latest`, which is the last 3.12 with Windows binaries, and the
   pinned lxml and PyYAML. A move to another Python fails the release

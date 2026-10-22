@@ -51,6 +51,16 @@ def executable_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def bundled_file(name: str) -> Path:
+    """A read-only document shipped with the code, such as ``LICENSE.md``.
+
+    From source, the file at the root of the checkout. Frozen, the copy the spec
+    file's ``datas`` put in the extraction directory — fine for reading while the
+    app runs, never somewhere to write.
+    """
+    return bundle_dir() / name
+
+
 def user_config_dir() -> Path:
     """Per-user configuration directory, created on demand by the caller.
 

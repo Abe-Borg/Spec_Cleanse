@@ -18,6 +18,14 @@ name: Release
 # anything is built it is checked against the license files installed on this
 # runner, so the texts shipped are the ones of the Python, Tcl/Tk, lxml, PyYAML
 # and PyInstaller actually being bundled.
+#
+# LICENSE.md is attached too, so the portable executable's own terms travel with
+# it as a file and not only inside its About dialog. So is the source of GNU
+# libiconv, which lxml's Windows wheel compiles into etree.pyd under the LGPL,
+# together with the lxml source it is linked into: LGPL-2.1 section 6(d) lets a
+# binary be distributed from a place only if the corresponding source can be
+# copied from that same place. Both are fetched at pinned revisions and checked
+# before anything is uploaded.
 
 on:
   push:
@@ -48,6 +56,7 @@ on:
       - "requirements-build.txt"
       - "patterns.yaml"
       - "THIRD_PARTY_NOTICES.txt"
+      - "LICENSE.md"
       - "*.py"
 
 permissions:
@@ -181,14 +190,48 @@ jobs:
           packaging\installer.iss
         shell: pwsh
 
+      - name: Fetch the LGPL corresponding source
+        # GNU libiconv is the one LGPL component in the bundle, compiled into
+        # lxml's etree.pyd. The release offers its source, and lxml's, from the
+        # same page as the executables, so whoever has the binary can rebuild it
+        # with a modified libiconv. The revisions are pinned and verified rather
+        # than taken from whatever a tag or an index serves today: a tag can be
+        # moved, and the source shipped must be the one that was built.
+        #
+        # LIBICONV_VERSION must match the notices and LXML_VERSION must match
+        # requirements.txt; tests/test_packaging.py checks both on every PR.
+        shell: bash
+        env:
+          LIBICONV_VERSION: "1.17"
+          LIBICONV_REPO: https://github.com/winlibs/libiconv.git
+          LIBICONV_COMMIT: 3b9151dad09ecb8e41e150f41d196f2792e1a1c6
+          LXML_VERSION: "6.0.2"
+          LXML_SDIST_URL: https://files.pythonhosted.org/packages/aa/88/262177de60548e5a2bfc46ad28232c9e9cbde697bd94132aeb80364675cb/lxml-6.0.2.tar.gz
+          LXML_SDIST_SHA256: cd79f3367bd74b317dda655dc8fcfa304d9eb6e4fb06b7168c5cf27f96e0cd62
+        run: |
+          set -euo pipefail
+          src="${RUNNER_TEMP}/libiconv-src"
+          git clone --quiet --depth 1 --branch "libiconv-${LIBICONV_VERSION}" "$LIBICONV_REPO" "$src"
+          commit="$(git -C "$src" rev-parse HEAD)"
+          if [ "$commit" != "$LIBICONV_COMMIT" ]; then
+            echo "::error::Tag libiconv-${LIBICONV_VERSION} is now ${commit}, not ${LIBICONV_COMMIT}"
+            exit 1
+          fi
+          git -C "$src" archive --format=tar.gz --prefix="libiconv-${LIBICONV_VERSION}/" \
+            -o "${GITHUB_WORKSPACE}/dist/libiconv-${LIBICONV_VERSION}-source.tar.gz" HEAD
+
+          curl -fsSL -o "dist/lxml-${LXML_VERSION}.tar.gz" "$LXML_SDIST_URL"
+          echo "${LXML_SDIST_SHA256}  dist/lxml-${LXML_VERSION}.tar.gz" | sha256sum -c -
+
       - name: Stage the portable executable and the notices
-        # The notices are copied into dist/ so the artifact below stays flat:
-        # upload-artifact keeps paths relative to the files' common ancestor,
-        # which a file at the repository root would move up to the root.
+        # The notices and the license are copied into dist/ so the artifact below
+        # stays flat: upload-artifact keeps paths relative to the files' common
+        # ancestor, which a file at the repository root would move up to the root.
         shell: bash
         run: |
           cp dist/SpecCleanse.exe "dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe"
           cp THIRD_PARTY_NOTICES.txt dist/
+          cp LICENSE.md dist/
           ls -lh dist/
 
       - name: Upload build artifacts
@@ -201,6 +244,9 @@ jobs:
             dist/SpecCleanse-${{ steps.version.outputs.version }}-portable.exe
             dist/SpecCleanse-Setup-${{ steps.version.outputs.version }}.exe
             dist/THIRD_PARTY_NOTICES.txt
+            dist/LICENSE.md
+            dist/libiconv-*-source.tar.gz
+            dist/lxml-*.tar.gz
           if-no-files-found: error
 
       - name: Attach the assets to the release
@@ -221,4 +267,7 @@ jobs:
             "dist/SpecCleanse-${version}-portable.exe" \
             "dist/SpecCleanse-Setup-${version}.exe" \
             dist/THIRD_PARTY_NOTICES.txt \
+            dist/LICENSE.md \
+            dist/libiconv-*-source.tar.gz \
+            dist/lxml-*.tar.gz \
             --clobber

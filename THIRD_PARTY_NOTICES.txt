@@ -1,8 +1,15 @@
 SpecCleanse third-party notices
 ===============================
 
-SpecCleanse is licensed under the PolyForm Noncommercial License 1.0.0; see
-LICENSE.md. This file covers everything else in the Windows release assets.
+SpecCleanse itself is licensed under the PolyForm Noncommercial License
+1.0.0: https://polyformproject.org/licenses/noncommercial/1.0.0 . The full
+terms are in LICENSE.md, which is installed beside the program and attached to
+each release, and both the license and this file can be read from the
+program's About dialog.
+
+Required Notice: Copyright 2025-2026 Abraham Borg (https://github.com/Abe-Borg/Spec_Cleanse)
+
+This file covers everything else in the Windows release assets.
 
 Both assets -- the installer, SpecCleanse-Setup-<version>.exe, and the
 portable executable, SpecCleanse-<version>-portable.exe -- are built with
@@ -21,7 +28,8 @@ files installed on the build machine, and fails if any of them differs.
 Several libraries are compiled *into* another component rather than shipped
 as files of their own -- libxml2, libxslt, zlib and GNU libiconv into lxml,
 LibYAML into PyYAML. Their notices are here even though no file of theirs
-appears in the bundle.
+appears in the bundle. GNU libiconv is under the LGPL; section 9 says what
+that lets you do with it and where its source is.
 
 Running SpecCleanse from source distributes none of this; each package there
 carries its own license files.
@@ -2130,11 +2138,35 @@ Component: Character-set conversion library, compiled into
            lxml/etree.pyd
 License:   GNU Lesser General Public License, version 2.1 or (at your
            option) any later version
-Source:    https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz; lxml's
-           Windows build compiles it from https://github.com/winlibs/libiconv
+Source:    Attached to every SpecCleanse release after v1.1.0, beside
+           the executables, as libiconv-1.17-source.tar.gz. That is the
+           tree lxml's Windows build compiles: winlibs/libiconv at tag
+           libiconv-1.17, commit 3b9151dad09ecb8e41e150f41d196f2792e1a1c6
+           (https://github.com/winlibs/libiconv). Upstream:
+           https://ftp.gnu.org/gnu/libiconv/libiconv-1.17.tar.gz
 Text from: The copyright and license statement heading lib/iconv.c, and
            COPYING.LIB, in the libiconv 1.17 source (winlibs/libiconv,
            tag libiconv-1.17)
+
+--- GNU libiconv 1.17: what the LGPL lets you do ------------------------------
+
+libiconv is linked statically into lxml's etree.pyd, which is inside the
+SpecCleanse executable. Section 6 of the LGPL says what has to come with a
+program built that way, and this is how each part is met:
+
+- The library's source. Every release that carries the executables also
+  carries libiconv-1.17-source.tar.gz, and lxml-6.0.2.tar.gz, the source of
+  the lxml it is linked into. SpecCleanse's own source is on the same
+  release page.
+
+- A way to relink. Build libiconv from that source, build lxml from its
+  source against it, install that lxml, and build SpecCleanse with
+  PyInstaller as SpecCleanse's README describes.
+
+- Terms that allow it. SpecCleanse's own license (LICENSE.md) does not limit
+  what the LGPL lets you do with libiconv. As section 6 requires, you may
+  modify the libiconv in the executable for your own use, and reverse
+  engineer the executable to debug such modifications.
 
 --- GNU libiconv 1.17: lib/iconv.c (header) -----------------------------------
 

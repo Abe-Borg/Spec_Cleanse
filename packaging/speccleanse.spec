@@ -22,7 +22,17 @@ a = Analysis(
     # The default patterns.yaml ships inside the bundle. It is not what the user
     # edits: apppaths.resolve_config_path copies it out to %APPDATA% on first run,
     # because PyInstaller deletes this extraction directory when the process ends.
-    datas=[(os.path.join(PROJECT_ROOT, "patterns.yaml"), ".")],
+    #
+    # LICENSE.md and THIRD_PARTY_NOTICES.txt ship inside it too, for the About
+    # dialog to display. The portable executable is often passed on by itself, and
+    # this is how its license terms and the notices of what it bundles go with it.
+    # Both still ship as files beside it as well — installed, and attached to the
+    # release — because a copy in here can only be read by running the program.
+    datas=[
+        (os.path.join(PROJECT_ROOT, "patterns.yaml"), "."),
+        (os.path.join(PROJECT_ROOT, "LICENSE.md"), "."),
+        (os.path.join(PROJECT_ROOT, "THIRD_PARTY_NOTICES.txt"), "."),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
