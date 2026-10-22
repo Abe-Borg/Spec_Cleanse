@@ -18,6 +18,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 import about
+import trust_view
 from apppaths import bundled_file, resolve_config_path
 from batch import (
     BatchItem,
@@ -32,6 +33,7 @@ from batch import (
 from detection import DetectionEngine, ContentType, config_notices
 from docx_xml import load_config
 from processor import DocxProcessor, ProcessingResult
+from theme import ACCENT, BG, BG_LIGHT, FG, FG_DIM, GREEN, RED, SURFACE, YELLOW  # noqa: F401
 from verify import verify_clean
 
 
@@ -305,16 +307,7 @@ def _log_verification(vresult, log) -> None:
 # Main Window
 # ---------------------------------------------------------------------------
 
-# Colours / theme
-BG        = "#1e1e2e"
-BG_LIGHT  = "#313244"
-FG        = "#cdd6f4"
-FG_DIM    = "#6c7086"
-ACCENT    = "#89b4fa"
-GREEN     = "#a6e3a1"
-RED       = "#f38ba8"
-YELLOW    = "#f9e2af"
-SURFACE   = "#45475a"
+# Colours / theme live in theme.py, so the trust dialogs draw in the same palette.
 
 
 class SpecCleanseGUI:
@@ -366,6 +359,15 @@ class SpecCleanseGUI:
             font=("Segoe UI", 9), relief="flat", padx=10, pady=2,
         )
         self.btn_about.pack(side="right")
+        # Beside About, and like it never disabled: what the program does to a
+        # document should be readable while it is doing it.
+        self.btn_trust = tk.Button(
+            header_frame, text="Why trust it?",
+            command=lambda: self._show_trust(self.btn_trust),
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 9), relief="flat", padx=10, pady=2,
+        )
+        self.btn_trust.pack(side="right", padx=(0, 8))
         ttk.Label(
             outer,
             text="Removes editorial notes, specifier comments, copyright boilerplate, "
@@ -578,11 +580,22 @@ class SpecCleanseGUI:
                 bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
                 font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
             ).pack(side="left", padx=(0, 8))
+        trust_button = tk.Button(
+            buttons, text="Why trust it?",
+            command=lambda: self._show_trust(trust_button),
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+        )
+        trust_button.pack(side="left", padx=(0, 8))
         tk.Button(
             buttons, text="Close", command=dialog.destroy,
             bg=ACCENT, fg=BG, activebackground=GREEN, activeforeground=BG,
             font=("Segoe UI", 10, "bold"), relief="flat", padx=14, pady=4,
         ).pack(side="right")
+
+    def _show_trust(self, opener: tk.Widget) -> "trust_view.WhyTrustDialog":
+        """Open "Why trust it?"; closing it returns focus to ``opener``."""
+        return trust_view.open_why_trust(opener.winfo_toplevel(), opener=opener)
 
     def _show_document(self, name: str, title: str):
         """Show a license document shipped with the app in a read-only window."""

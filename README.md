@@ -99,6 +99,14 @@ network folder.
 4. Click **Preview** to run a dry-run detection report.
 5. Click **CLEAN** to write cleaned documents (`*_cleaned.docx`).
 
+**Why trust it?** (top right, and inside About) explains in under two minutes
+what SpecCleanse does to your documents and why that can be relied on. Its
+**I'm not convinced — show me exactly what runs →** button opens the full
+account on top of it: where the cleaned file's content comes from, what leaves
+your computer (nothing, from SpecCleanse), one card per action answering the same
+five questions, what it does not do, and how to check every claim yourself. See
+[Why trust it?](#why-trust-it) below.
+
 **About** (top right) shows the copyright, the license and where to ask about
 commercial licensing or report a problem, and opens the full license and the
 third-party notices. The Windows executables carry both documents inside them, so
@@ -194,6 +202,33 @@ properties records the deletion — so they are removed whole.
 
 A tracked deletion of a *paragraph mark* is left alone: merging the two paragraphs
 would move content you never asked to move.
+
+## Why trust it?
+
+The whole design assumes a qualified person reads the cleaned file, so the
+program only ever removes, runs entirely on your computer, and tells you about
+anything it cannot account for instead of guessing. In short:
+
+- **No network, no AI.** None of the program's modules imports networking code —
+  no update check, telemetry or licence check — and every decision comes from
+  the rules in `patterns.yaml`. A firewall may still show Windows SmartScreen
+  checking the unsigned executable on first launch, and ordinary file traffic if
+  your files live on a network drive; neither is SpecCleanse.
+- **It only removes, and never touches the original.** The output is a new
+  `_cleaned.docx`, and the check after each clean fails any file with a paragraph
+  the original did not have.
+- **Nothing is kept.** Temporary unpacked copies are deleted after each file; the
+  log lives only in the window. Closing the window, or a crash, part-way through
+  a file can leave a temporary copy behind, and so can a deletion Windows refuses
+  — silently, for verification's own copies.
+- **A pass is not a promise.** Verification shares the cleaner's rules, so a
+  wrong rule is reported as expected.
+
+The in-app dossier (**Why trust it? → I'm not convinced**) gives the mechanism
+behind each claim, action by action. [`docs/TRUST_CLAIMS.md`](./docs/TRUST_CLAIMS.md)
+lists every claim either dialog makes with the code that makes it true and the
+test in `tests/test_trust.py` that pins it, so changing a constant, adding a
+button or importing a networking module fails a test until the words follow.
 
 ## Detection configuration
 
@@ -569,6 +604,11 @@ Spec_Cleanse/
 ├── docx_xml.py         # Shared WordprocessingML plumbing and config loading
 ├── apppaths.py         # Where patterns.yaml lives, source vs. frozen build
 ├── about.py            # Copyright, license and contact text for the About dialog
+├── trust.py            # Every word of "Why trust it?" and the dossier behind it
+├── trust_view.py       # The two trust dialogs (Tkinter), and the boundary diagram
+├── theme.py            # The window's colours and fonts, shared by every dialog
+├── docs/
+│   └── TRUST_CLAIMS.md # Every claim the trust dialogs make, its source, its test
 ├── patterns.yaml       # Detection patterns, styles, preserve rules
 ├── tools/              # Developer measurement utilities (not imported by the app)
 │   ├── actions.py             # What a build would do, one row per action

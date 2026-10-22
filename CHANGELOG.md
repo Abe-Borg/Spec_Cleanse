@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Why trust it?** — a short help topic beside About (and inside it) for the
+  person who has to put their name on a cleaned specification: one lead
+  sentence and eight claims, each with the mechanism that makes it true. Its
+  **I'm not convinced — show me exactly what runs →** button opens a dossier on
+  top of it: provenance, the components, a data-flow diagram of what leaves your
+  computer (nothing, from SpecCleanse; Windows SmartScreen and network drives
+  are named as the two things a firewall may still show), one card per action
+  answering the same five rows, what the program can and cannot touch, exact
+  meanings of Verified and Needs review, limits, and how to check all of it.
+  The words live in `trust.py`, the dialogs in `trust_view.py`, and
+  `docs/TRUST_CLAIMS.md` lists every claim with its source and test.
+  `tests/test_trust.py` pins the numbers, locations and names to the code, fails
+  when a button has no card or a module imports networking code, and checks the
+  dialogs stack, close one per Escape and return focus to their opener.
+
 ### Changed
 
 - **Verification now judges against source evidence rather than a flattened list
