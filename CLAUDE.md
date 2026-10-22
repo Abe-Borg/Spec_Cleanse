@@ -28,6 +28,9 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
 | `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build, and where the bundled `LICENSE.md` and notices are read from |
 | `about.py` | The About dialog's text — copyright line, license name and URL, contact links — kept out of `gui.py` so a test can hold it to `LICENSE.md` |
+| `trust.py` | Every word of the two trust surfaces — "Why trust it?" and the dossier it opens — as typed blocks (`Point`, `Table`, `RuntimeCard`, …). No tkinter, so `tests/test_trust.py` can hold the copy to the code anywhere. Quotes constants from `batch`, `apppaths` and `about` instead of retyping them |
+| `trust_view.py` | Draws those two dialogs: stacking, one-Escape-one-dialog, focus return, the contents rail, and the boundary diagram on a canvas. Adds no words of its own and loads no asset |
+| `theme.py` | The window's colours and fonts, shared by `gui.py` and `trust_view.py` |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
 | `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `benchmark_pipeline` (timings on synthetic fixtures, all eight §16.1 families; **not** the corpus harness), `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
 
@@ -41,6 +44,7 @@ but no detection policy. Anything that decides *what* to remove belongs in
 | File | Purpose |
 |------|---------|
 | `patterns.yaml` | All detection patterns, formatting signals, styles, preserve rules |
+| `docs/TRUST_CLAIMS.md` | The claims ledger: every claim the trust dialogs make, the file and symbol that make it true, and the test that pins it |
 | `requirements.txt` | Pinned Python dependencies (UTF-8) |
 | `CHANGELOG.md` | Release history, Keep a Changelog format |
 | `requirements-build.txt` | Build-time only (PyInstaller); not needed to run from source |
@@ -424,6 +428,46 @@ still leave a document on disk — verification raising after a successful write
 exactly that — and a reader told only "1 failed" cannot tell whether there is
 something in the output folder to delete.
 
+### The Trust Surfaces Are a Contract
+
+**Why trust it?** (Level 1, beside About and inside it) and the **"I'm not
+convinced"** dossier it opens (Level 2) tell the person who signs a cleaned
+specification what the program does to it. Their reader will compare them with
+a firewall log and with the source, so they are held to the code, not to
+intentions:
+
+- Every word is in `trust.py`; `trust_view.py` only draws it.
+- Every claim is in `docs/TRUST_CLAIMS.md` with its source and its test.
+- `tests/test_trust.py` pins every number in the copy (a number with no test
+  fails `test_every_number_in_the_copy_is_accounted_for`), fails when a module
+  imports networking code, when any code but **Open Output Folder** starts a
+  process, when a button has no runtime card, when a shipped rule count changes,
+  and when a test the ledger cites no longer exists.
+
+**Any change to a behaviour they describe updates them in the same change** —
+`trust.py`, the ledger, and the tests. What triggers that:
+
+- a new user action — a button, menu item, shortcut, file drop, dialog;
+- a new network call of any kind, including an update check or a link the app
+  opens (today the app opens no browser; the addresses shown are text to copy);
+- a new automatic behaviour — a timer, background job, retry, automatic follow-up;
+- a model or AI service, or a change to one (today there is none, and every
+  runtime card says "AI involved: None.");
+- a new or changed limit, threshold, default, file location or temporary file;
+- a change to what is written, kept or deleted on disk.
+
+Write the copy for a working engineer, not a programmer: "you", plain words, a
+term defined the first time it appears, and no absolute ("never", "nothing
+leaves") that has not been checked exhaustively or that does not name its
+exceptions. The dossier has a section on what the program does not do; a trust
+document that lists only strengths is marketing.
+
+Tk has no SVG and no accessibility roles. The diagram is drawn on a `tk.Canvas`
+and followed by a sentence restating it; the dialogs take the input with
+`grab_set`, bind Escape on their own toplevel (which is in every child's binding
+path and in no other window's), and give focus back to the widget that opened
+them. The app has one dark palette, so there is no light theme to check.
+
 ### Dataclass-Based Results
 
 Processing results are communicated via dataclasses, not exceptions:
@@ -684,7 +728,7 @@ Only two external dependencies — keep it minimal:
 
 ### File Organization
 
-- All source files are flat in the project root (no `src/` directory)
+- All source files are flat in the project root (no `src/` directory); `docs/` holds the claims ledger only
 - No packaging infrastructure (no `setup.py`, `pyproject.toml`)
 - Entry point: `python gui.py`
 - Imports are relative within the project (e.g., `from detection import DetectionEngine`)
@@ -760,6 +804,11 @@ Two suites carry the verification contract, and they ask opposite questions:
   satisfied by a verifier that simply distrusts everything.
 
 Add a test whenever you touch removal safety, the pattern tiers, or verification classification.
+
+`tests/test_trust.py` has three tiers: most of it runs anywhere; `GuiWorkerTrustTests`
+needs `gui.py` importable; `DialogTests` opens real windows and also needs a
+display, so it skips on CI's Linux lane (no display) and runs on the Windows lane.
+Run it locally on Linux under `xvfb-run` when changing `trust_view.py`.
 
 Two conventions matter here:
 
@@ -995,7 +1044,7 @@ Add the pattern to `editorial_artifacts.inline_patterns`. No code change is need
 - **DOCX only** — does not handle `.doc` (legacy binary format)
 - **Direct XML manipulation** — not using `python-docx`, so changes must be XML-aware
 - **No structural/style optimization** — those stages were retired; the cleaner only removes content
-- **Temp files** are created with `tempfile.mkdtemp(prefix="speccleanse_")` and cleaned up in `finally` blocks
+- **Temp files** are created with `tempfile.mkdtemp` — prefix `speccleanse_` (processor), `speccleanse_verify_` (verification) and `speccleanse_preview_` (the GUI's preview) — and cleaned up in `finally` blocks. The worker is a daemon thread, so closing the window mid-file skips those blocks and can leave a folder and a `.tmp` output behind; the trust dossier says so
 - **`patterns.yaml`** is found through `apppaths.resolve_config_path()`, *not* by assuming a directory. From source that is the file beside the modules; frozen, a copy beside the `.exe` wins, else a per-user copy under `%APPDATA%\SpecCleanse`. It is always read as UTF-8 — it contains `©`, `–` and `—`, which the Windows default encoding silently mangles
 - **Toggle properties** (`w:i`, `w:b`, `w:vanish`) are on when present *without* `w:val`, and off when `w:val` is `0`/`false`/`off`. Use `docx_xml.is_on()`/`toggle_on()`, never a bare `find(...) is not None`
 - **Toggle properties inherited through styles do not accumulate.** Along a `w:basedOn` chain they XOR: a style that repeats its base style's `<w:vanish/>` switches hidden back *off*, and Word renders that text normally. `StyleIndex.is_hidden()` implements that, and treats an explicit `w:val="0"` anywhere in the chain as off — where the spec leaves room, take the reading that keeps text
