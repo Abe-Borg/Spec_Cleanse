@@ -124,6 +124,8 @@ the configuration notice tells users about `tools.census_formatting`.
 |---|---|---|---|
 | C70 | There is no Stop button; closing the window is the only way to stop a run | `gui.SpecCleanseGUI` (no cancel control; worker is a daemon thread) | `DialogTests.test_there_is_no_stop_button` |
 | C71 | Closing mid-run can leave a `.tmp` file beside the destination and a `speccleanse_` folder holding an unpacked copy of the document in the temp folder | daemon thread killed at exit; `finally` blocks do not run | manual — reasoning from `threading` semantics; reported as a finding |
+| C77 | If deleting a temporary folder fails, the cleaner reports an error, but verification leaves its copies silently | `processor.DocxProcessor.process` (`shutil.rmtree` raises into `errors`), `verify.extract_paragraphs` and `verify.inspect_structure` (`shutil.rmtree(..., ignore_errors=True)`) | manual — reported as a finding |
+| C78 | Documents are processed only after a Preview or CLEAN click, on a background thread so the window stays responsive | `gui.SpecCleanseGUI._start_preview`, `_start_clean` (`threading.Thread`) | `NoNetworkTests.test_processing_starts_only_from_a_click` |
 | C72 | No size or time limit: a very large or crafted file is unpacked in full, and a badly written pattern can run for a very long time | no cap in `processor.DocxProcessor._unpack_docx`, no timeout anywhere | manual — reported as a finding |
 | C73 | Only `.docx`; the file check only asks whether `word/document.xml` exists | `processor.DocxProcessor._is_valid_docx` | existing `tests/test_processor.py` |
 | C74 | Document properties (author, company, custom properties) are not scrubbed | C16 | `OriginalUntouchedTests.test_unchanged_parts_are_copied_byte_for_byte` |

@@ -141,6 +141,24 @@ class NoNetworkTests(unittest.TestCase):
                     starters.add((path.name, owner))
         self.assertEqual(starters, {("gui.py", "_open_output_dir")})
 
+    def test_processing_starts_only_from_a_click(self):
+        # The copy says documents are processed only after Preview or CLEAN,
+        # on a background thread.  No other thread, timer or process pool may
+        # exist anywhere in the program.
+        owners = set()
+        for path in _root_modules():
+            for owner, node in _enclosing_functions(_tree(path)):
+                if isinstance(node, ast.Call):
+                    name = _dotted(node.func)
+                    if name.startswith(("threading.", "concurrent.", "multiprocessing.",
+                                        "sched.")):
+                        owners.add((path.name, owner, name))
+        self.assertEqual(owners, {
+            ("gui.py", "_start_clean", "threading.Thread"),
+            ("gui.py", "_start_preview", "threading.Thread"),
+        })
+        self.assertIn("only after you click Preview or CLEAN", _copy())
+
     def test_gui_writes_no_file_of_its_own(self):
         # The window keeps nothing: no log file, no settings, no history.  Its
         # only filesystem writes are the preview's temporary folder and its

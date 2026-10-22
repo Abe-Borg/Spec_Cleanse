@@ -227,9 +227,11 @@ LEVEL1_POINTS = (
         "did. Anything unexplained marks the file Needs review and says why.",
     ),
     Point(
-        "Nothing runs in the background",
-        f"There are no background jobs, retries or updates. Only two things "
-        f"happen without a click of their own: at start-up the program finds "
+        "Nothing starts without your click",
+        f"Documents are processed only after you click Preview or CLEAN — on a "
+        f"background thread, so the window stays responsive. There are no "
+        f"scheduled jobs, retries or updates. Only two things happen without a "
+        f"click of their own: at start-up the program finds "
         f"{CONFIG_NAME} (the installed program copies a default to "
         f"{USER_CONFIG} the first time), and after each CLEAN the check runs "
         f"automatically.",
@@ -237,9 +239,10 @@ LEVEL1_POINTS = (
     Point(
         "Your documents are not kept",
         "Each file is unpacked into your temporary folder while it is worked on "
-        "and deleted when it is done; only closing the program, or a crash, "
-        "part-way through a file can leave that copy behind. The log exists "
-        "only in the window. There "
+        "and deleted when it is done. A copy can be left behind if the program "
+        "is closed or crashes part-way through a file, or if Windows refuses "
+        "the deletion — and for the check's own copies that happens without a "
+        "word. The log exists only in the window. There "
         "is no history, no saved settings and nothing to sign in to.",
     ),
     Point(
@@ -280,7 +283,8 @@ _START = Section(
         ),
         Point(
             "Nothing runs that you did not start — with every exception named.",
-            "No network, no background work, no AI. The only things that happen "
+            "No network, no scheduled or unprompted work, no AI. The only things "
+            "that happen "
             "without a click are listed in the Runtime section below, and each "
             "one stays on your computer.",
         ),
@@ -628,7 +632,9 @@ _RUNTIME = Section(
             "original what the rules permitted losing, and compares: removed "
             "paragraphs, shortened paragraphs, added paragraphs, structure "
             "Word depends on (section breaks, fields, bookmarks, tables), "
-            "broken cross-references and numbering a removal may shift.",
+            "broken cross-references and numbering a removal may shift. Then "
+            "it deletes both copies; if a deletion fails, it carries on "
+            "without saying so.",
             "Nothing.",
             _NONE,
             "Never reads the cleaner's report. A file that does not pass is "
@@ -865,7 +871,9 @@ _SECURITY = Section(
                 ("Copies of your documents",
                  "Temporary folders only, deleted after each file. Closing "
                  "the program, or a crash, part-way through a file can leave "
-                 "one behind; see Stopping."),
+                 "one behind (see Stopping). So can a deletion Windows refuses "
+                 "— antivirus holding a file, say: the cleaner reports that as "
+                 "an error, but the check leaves its copies without a word."),
                 ("What is logged",
                  "Paragraph text and file paths, in the window only, never "
                  "written to disk."),

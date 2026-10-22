@@ -219,7 +219,8 @@ anything it cannot account for instead of guessing. In short:
   the original did not have.
 - **Nothing is kept.** Temporary unpacked copies are deleted after each file; the
   log lives only in the window. Closing the window, or a crash, part-way through
-  a file can leave a temporary copy behind.
+  a file can leave a temporary copy behind, and so can a deletion Windows refuses
+  — silently, for verification's own copies.
 - **A pass is not a promise.** Verification shares the cleaner's rules, so a
   wrong rule is reported as expected.
 
