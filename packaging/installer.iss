@@ -29,6 +29,9 @@ AppUpdatesURL={#AppURL}/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
+; The wizard shows this page, but /SILENT and /VERYSILENT skip the wizard and so
+; the page with it. That is not where the terms reach a user anyway: LICENSE.md is
+; installed below in every mode, and the app's About dialog shows it.
 LicenseFile=..\LICENSE.md
 ; Installs for the current user only, so no administrator prompt and no admin
 ; rights required. {autopf} resolves to %LOCALAPPDATA%\Programs under this

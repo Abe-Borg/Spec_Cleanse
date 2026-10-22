@@ -125,6 +125,14 @@ class FrozenLayoutTests(unittest.TestCase):
         self._bundle(seed_default=False)
         self.assertIsInstance(apppaths.resolve_config_path(), Path)
 
+    def test_bundled_documents_are_read_from_the_extraction_directory(self):
+        # The About dialog's LICENSE.md and notices are only ever read, so the
+        # temporary copy is the right one; nothing beside the .exe overrides it.
+        bundle = self._bundle()
+        (bundle.exe_dir / "LICENSE.md").write_text("not this one", encoding="utf-8")
+        self.assertEqual(apppaths.bundled_file("LICENSE.md"),
+                         bundle.meipass / "LICENSE.md")
+
 
 class VerifierConfigResolutionTests(unittest.TestCase):
     """Which patterns.yaml ``verify_clean`` loads, under each call mode.

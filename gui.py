@@ -17,7 +17,8 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from apppaths import resolve_config_path
+import about
+from apppaths import bundled_file, resolve_config_path
 from batch import (
     BatchItem,
     BatchPlan,
@@ -353,7 +354,18 @@ class SpecCleanseGUI:
         outer = ttk.Frame(self.root, padding=16)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="SpecCleanse", style="Header.TLabel").pack(anchor="w")
+        header_frame = ttk.Frame(outer)
+        header_frame.pack(fill="x")
+        ttk.Label(header_frame, text="SpecCleanse", style="Header.TLabel").pack(side="left")
+
+        # Not among the run controls: it is never disabled, so the license and
+        # notices stay readable while a batch is running.
+        self.btn_about = tk.Button(
+            header_frame, text="About", command=self._show_about,
+            bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+            font=("Segoe UI", 9), relief="flat", padx=10, pady=2,
+        )
+        self.btn_about.pack(side="right")
         ttk.Label(
             outer,
             text="Removes editorial notes, specifier comments, copyright boilerplate, "
@@ -542,6 +554,64 @@ class SpecCleanseGUI:
                 subprocess.Popen(["xdg-open", str(folder)])
         except OSError as exc:
             self._log(f"Could not open {folder}: {exc}")
+
+    def _show_about(self):
+        """Copyright, license and contact, with the bundled license documents."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title(f"About {about.APP_NAME}")
+        dialog.configure(bg=BG)
+        dialog.transient(self.root)
+        dialog.resizable(False, False)
+
+        frame = ttk.Frame(dialog, padding=16)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text=about.APP_NAME, style="Header.TLabel").pack(anchor="w")
+        ttk.Label(frame, text=about.about_text(), wraplength=520,
+                  justify="left").pack(anchor="w", pady=(4, 12))
+
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x")
+        for text, name in (("License", about.LICENSE_FILE),
+                           ("Third-party notices", about.NOTICES_FILE)):
+            tk.Button(
+                buttons, text=text, command=lambda n=name, t=text: self._show_document(n, t),
+                bg=SURFACE, fg=FG, activebackground=ACCENT, activeforeground=BG,
+                font=("Segoe UI", 10), relief="flat", padx=10, pady=4,
+            ).pack(side="left", padx=(0, 8))
+        tk.Button(
+            buttons, text="Close", command=dialog.destroy,
+            bg=ACCENT, fg=BG, activebackground=GREEN, activeforeground=BG,
+            font=("Segoe UI", 10, "bold"), relief="flat", padx=14, pady=4,
+        ).pack(side="right")
+
+    def _show_document(self, name: str, title: str):
+        """Show a license document shipped with the app in a read-only window."""
+        path = bundled_file(name)
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror(
+                title, f"Could not read {path}: {exc}\n\nIt is also published at "
+                       f"{about.PROJECT_URL}",
+            )
+            return
+
+        window = tk.Toplevel(self.root)
+        window.title(f"{about.APP_NAME} — {title}")
+        window.configure(bg=BG)
+        window.geometry("760x560")
+
+        body = tk.Text(
+            window, wrap="word", bg=BG_LIGHT, fg=FG, font=("Consolas", 9),
+            relief="flat", borderwidth=0, padx=8, pady=8,
+        )
+        sb = ttk.Scrollbar(window, orient="vertical", command=body.yview)
+        body.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        body.pack(fill="both", expand=True)
+        body.insert("1.0", text)
+        # Read-only, but still selectable so a passage can be copied out.
+        body.configure(state="disabled")
 
     def _log(self, text: str):
         """Queue a line for the log; safe to call from the worker thread."""

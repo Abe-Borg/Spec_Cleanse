@@ -26,7 +26,8 @@ There is no longer a "deep clean" or "style clean" stage in the active pipeline.
 | `processor.py` | DOCX unpacking/repacking, XML walking, element removal, inline redaction |
 | `verify.py` | Post-processing verification: comparison and classification against the source evidence — removals, modifications, structural lint |
 | `docx_xml.py` | Shared WordprocessingML plumbing: namespaces, iteration, text extraction, structure rules, style resolution, config loading |
-| `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build |
+| `apppaths.py` | Runtime file locations: which `patterns.yaml` to load from source vs. a frozen build, and where the bundled `LICENSE.md` and notices are read from |
+| `about.py` | The About dialog's text — copyright line, license name and URL, contact links — kept out of `gui.py` so a test can hold it to `LICENSE.md` |
 | `tests/` | stdlib `unittest` suite; builds synthetic DOCX files with `zipfile` |
 | `tools/` | Developer measurement utilities. Never imported by the application, read-only, dry runs. `benchmark_pipeline` (timings on synthetic fixtures, all eight §16.1 families; **not** the corpus harness), `actions` (what a build would *do*, one row per action — the base the others rest on), `census_formatting` (what turning formatting-only removal off would cost), `census_references` (removals inside referenced bookmark ranges), `corpus_compare` (record decisions, diff two builds) |
 
@@ -842,7 +843,7 @@ Two executables are produced: `SpecCleanse-<version>-portable.exe` (a single
 windowed executable) and `SpecCleanse-Setup-<version>.exe` (an Inno Setup
 installer that installs per-user, so it needs no administrator rights). Neither
 is code-signed, so SmartScreen warns on first run. `THIRD_PARTY_NOTICES.txt` is
-attached beside them as a third asset — see below.
+attached beside them, with `LICENSE.md` and the LGPL source archives — see below.
 
 ### Third-party notices
 
@@ -851,13 +852,33 @@ run-time hooks, and what those are built with. Their licenses require their
 notices to travel with the binary — Tcl/Tk's verbatim — and
 `THIRD_PARTY_NOTICES.txt` holds them.
 
-**How it ships.** The installer installs it (`[Files]`, beside `LICENSE.md`). The
-portable executable cannot carry a readable copy, so the release attaches the file
-as an asset beside it; the workflow stages it into `dist\` so the artifact stays
-flat. It is deliberately *not* in the spec's `datas`: that unpacks into
-PyInstaller's temporary extraction directory, deleted on exit, and nothing in the
-app shows it, so a copy there reaches no one. Bundle it only alongside an About
-dialog that displays it.
+**How it ships.** Three ways, because each covers a path the others miss. The
+installer installs it (`[Files]`, beside `LICENSE.md`). The release attaches it as
+an asset beside the portable executable; the workflow stages it into `dist\` so
+the artifact stays flat. And the spec's `datas` bundles it, with `LICENSE.md`, for
+the About dialog to display: the portable executable is often passed on alone, and
+a silent install skips the installer's license page. A copy in the extraction
+directory is only worth shipping because something shows it — if the About dialog
+ever goes, the `datas` entries go with it.
+
+**SpecCleanse's own terms travel the same three ways.** PolyForm's Notices clause
+asks that a recipient gets the terms or their URL and every `Required Notice:`
+line. The notices file states both at the top, so it suffices alone beside the
+portable executable; `about.py` repeats them for the dialog. `tests/test_about.py`
+holds both to the line `LICENSE.md` actually contains — change the copyright line
+there and the tests name every copy that must follow.
+
+**libiconv is the one component whose license asks more than a notice.** It is
+LGPL-2.1-or-later and linked statically into `etree.pyd`, so section 6 applies:
+the recipient must be able to get its source, relink with a modified copy, and be
+permitted to modify it and reverse engineer the program to debug that. The release
+workflow's *Fetch the LGPL corresponding source* step attaches the libiconv tree at
+a pinned `winlibs/libiconv` commit and the pinned lxml sdist, checked against its
+PyPI hash, so the source is offered from the same place as the binary (6(d)).
+Section 9 of the notices carries the relinking route and the permission. When lxml
+moves, that step's `LXML_*` values move with `requirements.txt`, and when lxml's
+Windows build moves to another libiconv, the `LIBICONV_*` values and section 9
+follow; `tests/test_packaging.py` fails until they agree.
 
 **What it has to cover is more than the obvious four**, and each of these was
 found in the binaries rather than assumed:

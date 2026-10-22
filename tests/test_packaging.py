@@ -25,8 +25,11 @@ import yaml
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PACKAGING = PROJECT_ROOT / "packaging"
 INSTALLER = PACKAGING / "installer.iss"
+SPEC = PACKAGING / "speccleanse.spec"
 RELEASE_WORKFLOW = PROJECT_ROOT / ".github" / "workflows" / "release.yml"
 NOTICES = "THIRD_PARTY_NOTICES.txt"
+LICENSE = "LICENSE.md"
+LGPL_SOURCE_STEP = "Fetch the LGPL corresponding source"
 
 
 def _load_check_notices():
@@ -129,6 +132,20 @@ class InstallerSourceTests(unittest.TestCase):
         self.assertIn(PROJECT_ROOT / NOTICES, installed)
 
 
+class ExecutableBundleTests(unittest.TestCase):
+    """What the spec file packs into the executable for the About dialog."""
+
+    def test_the_license_and_notices_are_bundled(self):
+        # The About dialog reads both from the bundle. Read as text: the spec is
+        # Python, but executing it needs PyInstaller's Analysis and friends.
+        spec = SPEC.read_text(encoding="utf-8")
+        for name in (LICENSE, NOTICES):
+            with self.subTest(name=name):
+                self.assertRegex(
+                    spec, rf'os\.path\.join\(PROJECT_ROOT, "{re.escape(name)}"\), "\."\)')
+                self.assertTrue((PROJECT_ROOT / name).is_file())
+
+
 class ReleaseWorkflowTests(unittest.TestCase):
     """The portable executable has no installer, so the release carries its notices."""
 
@@ -148,10 +165,51 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertIn(f"dist/{NOTICES}", release)
         self.assertTrue((PROJECT_ROOT / NOTICES).is_file())
 
+    def test_the_license_is_uploaded_with_both_executables(self):
+        # The portable executable's own terms, as a file beside it.
+        artifact = self.steps["Upload build artifacts"]["with"]["path"]
+        release = self.steps["Attach the assets to the release"]["run"]
+        staging = self.steps["Stage the portable executable and the notices"]["run"]
+
+        self.assertRegex(staging, rf"cp .*\b{re.escape(LICENSE)} dist/")
+        self.assertIn(f"dist/{LICENSE}", artifact)
+        self.assertIn(f"dist/{LICENSE}", release)
+
+    def test_the_lgpl_source_is_uploaded_with_both_executables(self):
+        artifact = self.steps["Upload build artifacts"]["with"]["path"]
+        release = self.steps["Attach the assets to the release"]["run"]
+        for asset in ("dist/libiconv-*-source.tar.gz", "dist/lxml-*.tar.gz"):
+            with self.subTest(asset=asset):
+                self.assertIn(asset, artifact)
+                self.assertIn(asset, release)
+        names = list(self.steps)
+        self.assertLess(names.index(LGPL_SOURCE_STEP),
+                        names.index("Upload build artifacts"))
+
+    def test_the_lgpl_source_is_the_one_that_was_built(self):
+        # The lxml source must be the pinned lxml, and the libiconv source the
+        # revision the notices name; a version moved in one place only would
+        # publish the source of something the executable does not contain.
+        env = self.steps[LGPL_SOURCE_STEP]["env"]
+        requirements = (PROJECT_ROOT / "requirements.txt").read_text(encoding="utf-8")
+        pinned = re.search(r"^lxml==(\S+)", requirements, flags=re.M).group(1)
+        notices = (PROJECT_ROOT / NOTICES).read_text(encoding="utf-8")
+
+        self.assertEqual(env["LXML_VERSION"], pinned)
+        self.assertTrue(env["LXML_SDIST_URL"].endswith(f"/lxml-{pinned}.tar.gz"))
+        self.assertRegex(env["LXML_SDIST_SHA256"], r"^[0-9a-f]{64}$")
+        self.assertIn(f"lxml-{pinned}.tar.gz", notices)
+
+        self.assertIn(f"GNU libiconv {env['LIBICONV_VERSION']}", notices)
+        self.assertIn(f"libiconv-{env['LIBICONV_VERSION']}-source.tar.gz", notices)
+        self.assertIn(env["LIBICONV_COMMIT"], notices)
+
     def test_editing_the_notices_builds_the_release(self):
         # Editing the notices has to run the check that compares them with
-        # what the runner installs, which only this workflow does.
+        # what the runner installs, which only this workflow does. The license
+        # is bundled into the executable too, so editing it rebuilds as well.
         self.assertIn(NOTICES, self.triggers["pull_request"]["paths"])
+        self.assertIn(LICENSE, self.triggers["pull_request"]["paths"])
 
     def test_the_notices_are_checked_before_anything_is_built(self):
         names = list(self.steps)
